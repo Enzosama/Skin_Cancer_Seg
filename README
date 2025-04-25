@@ -1,0 +1,69 @@
+# AI Image Prediction Flask Application
+
+This Flask application provides a web interface for users to upload images and receive AI predictions about the content of those images. It also includes a chatbot feature that users can interact with for help.
+
+## Features
+
+- Image upload via drag-and-drop or file browser
+- AI prediction results displayed as a list
+- Chatbot assistance via a popup interface
+- Clean, responsive UI design
+
+## Requirements
+
+- Python 3.10+
+- Flask
+- Werkzeug
+
+## Installation
+
+1. Clone this repository:
+```
+git clone https://github.com/Enzosama/Skin_cancer.git
+cd Skin_cancer
+```
+
+2. Create a virtual environment (recommended):
+```
+python -m venv venv
+```
+
+3. Activate the virtual environment:
+   - On Windows:
+   ```
+   venv\Scripts\activate
+   ```
+   - On macOS/Linux:
+   ```
+   source venv/bin/activate
+   ```
+
+4. Install the required dependencies:
+```
+pip install flask
+```
+
+## Project Structure
+
+```
+ai-image-prediction/
+├── app.py                  # Flask application
+├── static/                 # Static files
+│   └── uploads/            # Uploaded images folder
+│   └── model               # Model segmentation
+└── templates/              # HTML templates
+    └── index.html          # Main application template
+```
+
+## Running the Application
+
+1. Ensure your virtual environment is activated
+2. Run the Flask application:
+```
+python app.py
+```
+3. Open your web browser and go to http://127.0.0.1:5000/
+
+## License
+
+[Your License Here]
