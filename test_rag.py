@@ -1,9 +1,14 @@
 import argparse
 import os
 import sys
+from dotenv import load_dotenv
+load_dotenv()
+import torch
 from rag import RAG, QueryParam, google_complete, llama_complete, openai_embedding, google_embedding, groq_embedding
 from rag.llm import hugging_face_embedding
-import os
+
+# Debug: print HUGGING_FACE_API_KEY
+print('DEBUG HUGGING_FACE_API_KEY:', os.environ.get('HUGGING_FACE_API_KEY'))
 
 def get_api_key(service: str):
     env_map = {
@@ -54,8 +59,8 @@ def main():
         api_key = get_api_key("openai")
         emb_func = lambda texts: openai_embedding(texts, api_key=api_key)
     elif args.embed_engine == "hugging_face":
-        api_key = get_api_key("hugging_face")
-        emb_func = lambda texts: hugging_face_embedding(texts, api_key=api_key)
+        # hugging_face_embedding does NOT accept api_key, only pass texts
+        emb_func = lambda texts: hugging_face_embedding(texts)
     else:
         raise ValueError(f"Unknown embed_engine: {args.embed_engine}")
 

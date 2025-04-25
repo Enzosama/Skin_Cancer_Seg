@@ -29,15 +29,15 @@ class RAG:
         self.chunks = [chunk for chunk in text.split('\n\n') if chunk]
         if not self.chunks:
             self.chunks = [text]
-        # embed chunks
-        self.embeddings = asyncio.run(self.embedding_func(self.chunks))
+        # embed chunks (call synchronously, hugging_face_embedding is not async)
+        self.embeddings = self.embedding_func(self.chunks)
 
     def query(self, question: str, param: QueryParam):
         """
         Query the RAG: embed question, find top_k similar chunks, then call LLM with context.
         """
-        # embed question
-        q_emb_arr = asyncio.run(self.embedding_func([question]))
+        # embed question (call synchronously, hugging_face_embedding is not async)
+        q_emb_arr = self.embedding_func([question])
         # Ensure q_emb is a 1D array
         if isinstance(q_emb_arr, np.ndarray):
             q_emb = q_emb_arr[0]

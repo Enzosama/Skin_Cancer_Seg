@@ -1,4 +1,5 @@
 import asyncio
+import torch
 import torch.nn.functional as F
 from torch import Tensor
 from transformers import AutoTokenizer, AutoModel
