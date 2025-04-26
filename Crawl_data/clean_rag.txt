@@ -145,5 +145,4 @@
 {"disease_name": "Basal cell carcinoma", "url": "https://www.ncbi.nlm.nih.gov/books/NBK556077/", "title": "[Bookshelf](https://www.ncbi.nlm.nih.gov/books/ \"Bookshelf home\")", "question": "Related information", "answer": "PubMed Central citations Links to PubMed"}
 {"disease_name": "Benign keratosis-like lesions", "url": "https://medlineplus.gov/ency/article/000867.htm", "title": "Lichen planus", "question": "Possible Complications", "answer": "Expand Section"}
 {"disease_name": "Basal cell carcinoma", "url": "https://dermnetnz.org/topics/basal-cell-carcinoma", "title": "**Basal cell carcinoma**", "question": "How can basal cell carcinoma be prevented?", "answer": "* Stay indoors or under the shade in the middle of the day."}
-{"disease_name": "Basal cell carcinoma", "url": "https://medlineplus.gov/ency/article/000885.htm", "title": "Warts", "question": "Related MedlinePlus Health Topics", "answer": "Expand Section"}
-{"disease_name": "Pyogenic granulomas and hemorrhage", "url": "https://medlineplus.gov/ency/article/001069.htm", "title": "Basal ganglia dysfunction", "question": "Related MedlinePlus Health Topics", "answer": "Expand Section"}
+

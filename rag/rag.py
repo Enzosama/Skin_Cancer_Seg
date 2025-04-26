@@ -1,5 +1,4 @@
 import numpy as np
-import numpy as np
 import asyncio
 from dataclasses import dataclass
 from typing import List
@@ -32,6 +31,17 @@ class RAG:
         # embed chunks (call synchronously, hugging_face_embedding is not async)
         self.embeddings = self.embedding_func(self.chunks)
 
+    def vector_search(self, query_embedding, n_results=3):
+        """
+        Perform vector search over stored embeddings.
+        Returns indices of top n_results most similar chunks.
+        """
+        sims = np.dot(self.embeddings, query_embedding) / (
+            np.linalg.norm(self.embeddings, axis=1) * np.linalg.norm(query_embedding)
+        )
+        top_idx = np.argsort(-sims)[:n_results]
+        return top_idx
+
     def query(self, question: str, param: QueryParam):
         """
         Query the RAG: embed question, find top_k similar chunks, then call LLM with context.
@@ -45,12 +55,8 @@ class RAG:
             q_emb = np.array(q_emb_arr[0])
         else:
             q_emb = np.array(q_emb_arr)
-        # compute cosine similarity
-        sims = np.dot(self.embeddings, q_emb) / (
-            np.linalg.norm(self.embeddings, axis=1) * np.linalg.norm(q_emb)
-        )
-        # pick top indices
-        top_idx = np.argsort(-sims)[: param.top_k]
+        # vector search
+        top_idx = self.vector_search(q_emb, n_results=param.top_k)
         from rag.prompt import build_rag_prompt, get_system_prompt
         context = "\n\n".join(self.chunks[i] for i in top_idx)
         system = get_system_prompt()
