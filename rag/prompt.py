@@ -88,8 +88,7 @@ def get_user_prompt(question: str) -> str:
 
 def build_rag_prompt(context: str, question: str, system: str = None) -> str:
     """
-    Compose the full prompt for the RAG LLM.
-    Optionally include a system prompt.
+    Compose the answer ONLY for the RAG LLM, no prompt, no context, just the answer.
     """
-    sys = f"System: {system}\n" if system else ""
-    return f"{sys}Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+    # Trả về chỉ phần answer, không có context, prompt, hay hướng dẫn nào khác
+    return context.strip() if context.strip() else "Không tìm thấy thông tin phù hợp."

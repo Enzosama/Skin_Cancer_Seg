@@ -32,6 +32,9 @@ def hugging_face_complete(prompt: str, api_key=None):
     # Dummy function, replace with actual HF LLM if available
     return "[HF LLM] Answer to: " + prompt
 
+async def hugging_face_complete_async(prompt: str, api_key=None):
+    return hugging_face_complete(prompt, api_key)
+
 def main():
     parser = argparse.ArgumentParser(description="Run NativeRag on a Skin Cancer dataset.")
     parser.add_argument("--working_dir", default="./rag_cache")
@@ -42,17 +45,8 @@ def main():
     parser.add_argument("--top_k", type=int, default=5)
     args = parser.parse_args()
 
-    # Select LLM function with API key routing
-    if args.engine == "google":
-        api_key = get_api_key("google")
-        llm_func = lambda prompt: google_complete(prompt, api_key=api_key)
-    elif args.engine == "llama":
-        llm_func = llama_complete  # Local, no API key needed
-    elif args.engine == "hugging_face":
-        api_key = get_api_key("hugging_face")
-        llm_func = lambda prompt: hugging_face_complete(prompt, api_key=api_key)
-    else:
-        raise ValueError(f"Unknown engine: {args.engine}")
+    # Select LLM function: luôn trả về nguyên prompt (không wrap, không gọi LLM dummy)
+    llm_func = lambda prompt: prompt
 
     # Select embedding function with API key routing
     if args.embed_engine == "openai":
@@ -72,11 +66,23 @@ def main():
 
     # Ingest data
     with open(args.data_file, encoding="utf-8") as f:
-        rag.insert(f.read())
+        data = f.read()
+        print("[DEBUG] Loaded data (first 300 chars):", data[:300])
+        rag.insert(data)
+    print("[DEBUG] Chunks after insert:", rag.chunks)
+    print("[DEBUG] Embeddings shape:", rag.embeddings.shape)
 
     # Query and print result
-    result = rag.query(args.question, QueryParam(top_k=args.top_k))
-    print(result)
+    import asyncio
+    async def debug_query():
+        print("[DEBUG] Question:", args.question)
+        param = QueryParam(top_k=args.top_k)
+        res = await rag.query(args.question, param)
+        print("[DEBUG] Query result:", res)
+        return res
+    result = asyncio.run(debug_query())
+    print("[DEBUG] Final result:", result)
+
 
 if __name__ == "__main__":
     main()

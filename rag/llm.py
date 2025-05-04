@@ -58,7 +58,9 @@ async def google_complete(prompt: str):
 async def llama_complete(prompt: str):
     return "[LLaMA LLM] Answer to: " + prompt
 
-# Embedding functions using Multilingual-E5-Large-Instruct
+async def hugging_face_llm(prompt: str):
+    return "[HuggingFace LLM] Answer to: " + prompt
+
 async def openai_embedding(texts, model=None):
     model = get_e5_model()
     # E5 expects "query: ..." or "passage: ..."

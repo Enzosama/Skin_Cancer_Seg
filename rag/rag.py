@@ -12,23 +12,38 @@ class RAG:
         """
         working_dir: path for cache/store (unused in this simple RAG)
         llm_model_func: async function for chat completion
-        embedding_func: async function for embeddings
+        embedding_func: function for embeddings
         """
         self.working_dir = working_dir
         self.llm_model_func = llm_model_func
         self.embedding_func = embedding_func
         self.chunks: List[str] = []
         self.embeddings: np.ndarray = np.array([])
+        # Store answers separately when ingesting CSV
+        self.answers: List[str] = []
 
     def insert(self, text: str):
         """
         Ingest a document: chunk by paragraphs and embed all chunks.
         """
-        # simple chunk by paragraphs
-        self.chunks = [chunk for chunk in text.split('\n\n') if chunk]
-        if not self.chunks:
-            self.chunks = [text]
-        # embed chunks (call synchronously, hugging_face_embedding is not async)
+        import csv, io
+        text_stripped = text.strip()
+        # If CSV with header 'type_disease', parse only answers
+        if text_stripped.startswith('type_disease'):
+            reader = csv.DictReader(io.StringIO(text))
+            chunks = []
+            self.answers = []
+            for row in reader:
+                q = row.get('question', '')
+                a = row.get('answer', '')
+                chunks.append(f"{q} {a}".strip())  # embed both Q&A for relevance
+                self.answers.append(a)
+            self.chunks = chunks
+        else:
+            self.chunks = [chunk for chunk in text.split('\n\n') if chunk]
+            if not self.chunks:
+                self.chunks = [text]
+        # Embed chunks
         self.embeddings = self.embedding_func(self.chunks)
 
     def vector_search(self, query_embedding, n_results=3):
@@ -36,30 +51,48 @@ class RAG:
         Perform vector search over stored embeddings.
         Returns indices of top n_results most similar chunks.
         """
+        if len(self.embeddings) == 0:
+            return []
         sims = np.dot(self.embeddings, query_embedding) / (
             np.linalg.norm(self.embeddings, axis=1) * np.linalg.norm(query_embedding)
         )
         top_idx = np.argsort(-sims)[:n_results]
         return top_idx
 
-    def query(self, question: str, param: QueryParam):
+    async def query(self, question: str, param: QueryParam = QueryParam()):
         """
-        Query the RAG: embed question, find top_k similar chunks, then call LLM with context.
+        Query the RAG: embed question, find top_k similar chunks, then return answers.
         """
-        # embed question (call synchronously, hugging_face_embedding is not async)
         q_emb_arr = self.embedding_func([question])
-        # Ensure q_emb is a 1D array
         if isinstance(q_emb_arr, np.ndarray):
             q_emb = q_emb_arr[0]
         elif isinstance(q_emb_arr, list) and isinstance(q_emb_arr[0], (list, np.ndarray)):
             q_emb = np.array(q_emb_arr[0])
         else:
             q_emb = np.array(q_emb_arr)
-        # vector search
-        top_idx = self.vector_search(q_emb, n_results=param.top_k)
+
+        # Always search for at most 3 results
+        top_k = min(3, param.top_k)
+        top_idx = self.vector_search(q_emb, n_results=top_k)
+        print("[DEBUG][RAG.query] Top idx:", top_idx)
+
+        if len(top_idx) == 0:
+            return "No relevant answer found in knowledge base."
+
+        # Only use top_k chunks for context and answer
+        context_chunks = [self.chunks[i] for i in top_idx]
+        context = "\n\n".join(context_chunks)
+        print("[DEBUG][RAG.query] Context:", context)
+
+        # If you want to keep the prompt logic for future LLM use
         from rag.prompt import build_rag_prompt, get_system_prompt
-        context = "\n\n".join(self.chunks[i] for i in top_idx)
         system = get_system_prompt()
         prompt = build_rag_prompt(context, question, system)
-        # call LLM
-        return asyncio.run(self.llm_model_func(prompt))
+        print("[DEBUG][RAG.query] Prompt:", prompt)
+
+        # Return up to 3 answers: only the answer texts if available
+        if hasattr(self, 'answers') and self.answers:
+            result = "\n---\n".join(self.answers[i] for i in top_idx)
+        else:
+            result = "\n---\n".join(context_chunks)
+        return result

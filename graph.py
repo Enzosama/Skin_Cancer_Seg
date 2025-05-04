@@ -63,7 +63,7 @@ def search_llm_node(state: AgentState):
     log_debug('--search_llm_node result--', result)
     return result
 
-# Logic điều hướng: nếu RAG ổn thì kết thúc, nếu không thì sang search_llm
+# Logic điều hướng: nếu RAG ổn thì kết thúc, nếu không call search_llm
 def decision_logic(state: AgentState):
     if state.get('use_rag'):
         return 'rag'
