@@ -23,28 +23,36 @@ class RAG:
         self.answers: List[str] = []
 
     def insert(self, text: str):
-        """
-        Ingest a document: chunk by paragraphs and embed all chunks.
-        """
         import csv, io
         text_stripped = text.strip()
-        # If CSV with header 'type_disease', parse only answers
+        # Chunk text and parse CSV answers
         if text_stripped.startswith('type_disease'):
             reader = csv.DictReader(io.StringIO(text))
-            chunks = []
-            self.answers = []
+            new_chunks = []
+            new_answers = []
             for row in reader:
                 q = row.get('question', '')
                 a = row.get('answer', '')
-                chunks.append(f"{q} {a}".strip())  # embed both Q&A for relevance
-                self.answers.append(a)
-            self.chunks = chunks
+                new_chunks.append(f"{q} {a}".strip())
+                new_answers.append(a)
         else:
-            self.chunks = [chunk for chunk in text.split('\n\n') if chunk]
-            if not self.chunks:
-                self.chunks = [text]
-        # Embed chunks
-        self.embeddings = self.embedding_func(self.chunks)
+            new_chunks = [chunk for chunk in text.split('\n\n') if chunk]
+            if not new_chunks:
+                new_chunks = [text]
+            new_answers = []
+        # Embed new chunks
+        new_emb = self.embedding_func(new_chunks)
+        if not isinstance(new_emb, np.ndarray):
+            new_emb = np.array(new_emb)
+        # Append or initialize
+        if self.embeddings.size == 0:
+            self.chunks = new_chunks
+            self.embeddings = new_emb
+            self.answers = new_answers
+        else:
+            self.chunks.extend(new_chunks)
+            self.embeddings = np.vstack([self.embeddings, new_emb])
+            self.answers.extend(new_answers)
 
     def vector_search(self, query_embedding, n_results=3):
         """
