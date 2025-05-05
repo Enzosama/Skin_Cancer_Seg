@@ -25,8 +25,10 @@ class RAG:
     def insert(self, text: str):
         import csv, io
         text_stripped = text.strip()
-        # Chunk text and parse CSV answers
-        if text_stripped.startswith('type_disease'):
+        # Detect CSV by header containing 'question' and 'answer'
+        lines = text_stripped.splitlines()
+        header_line = lines[0] if lines else ''
+        if ',' in header_line and 'question' in header_line.lower() and 'answer' in header_line.lower():
             reader = csv.DictReader(io.StringIO(text))
             new_chunks = []
             new_answers = []
@@ -79,10 +81,9 @@ class RAG:
         else:
             q_emb = np.array(q_emb_arr)
 
-        # Always search for at most 3 results
-        top_k = min(3, param.top_k)
+        # Determine number of results from param
+        top_k = param.top_k
         top_idx = self.vector_search(q_emb, n_results=top_k)
-        print("[DEBUG][RAG.query] Top idx:", top_idx)
 
         if len(top_idx) == 0:
             return "No relevant answer found in knowledge base."
@@ -90,13 +91,11 @@ class RAG:
         # Only use top_k chunks for context and answer
         context_chunks = [self.chunks[i] for i in top_idx]
         context = "\n\n".join(context_chunks)
-        print("[DEBUG][RAG.query] Context:", context)
 
         # If you want to keep the prompt logic for future LLM use
         from rag.prompt import build_rag_prompt, get_system_prompt
         system = get_system_prompt()
         prompt = build_rag_prompt(context, question, system)
-        print("[DEBUG][RAG.query] Prompt:", prompt)
 
         # Return up to 3 answers: only the answer texts if available
         if hasattr(self, 'answers') and self.answers:

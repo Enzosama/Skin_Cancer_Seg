@@ -6,6 +6,7 @@ load_dotenv()
 import torch
 from rag import RAG, QueryParam, google_complete, llama_complete, openai_embedding, google_embedding, groq_embedding
 from rag.llm import hugging_face_embedding
+from PyPDF2 import PdfReader
 
 # Debug: print HUGGING_FACE_API_KEY
 print('DEBUG HUGGING_FACE_API_KEY:', os.environ.get('HUGGING_FACE_API_KEY'))
@@ -38,7 +39,7 @@ async def hugging_face_complete_async(prompt: str, api_key=None):
 def main():
     parser = argparse.ArgumentParser(description="Run NativeRag on a Skin Cancer dataset.")
     parser.add_argument("--working_dir", default="./rag_cache")
-    parser.add_argument("--data_file", required=True)
+    parser.add_argument("--data_file", default="Data", help="Path to data file or directory")
     parser.add_argument("--question", required=True)
     parser.add_argument("--engine", choices=["google", "llama", "hugging_face"], default="google")
     parser.add_argument("--embed_engine", choices=["openai", "google", "groq", "hugging_face"], default="openai")
@@ -64,11 +65,32 @@ def main():
         embedding_func=emb_func,
     )
 
-    # Ingest data
-    with open(args.data_file, encoding="utf-8") as f:
-        data = f.read()
-        print("[DEBUG] Loaded data (first 300 chars):", data[:300])
-        rag.insert(data)
+    # Ingest data (file or directory)
+    data_path = args.data_file
+    if os.path.isdir(data_path):
+        for root, dirs, files in os.walk(data_path):
+            for fname in files:
+                path = os.path.join(root, fname)
+                ext = fname.lower().rsplit('.',1)[-1]
+                if ext == 'pdf':
+                    try:
+                        reader = PdfReader(path)
+                        text = '\n'.join(page.extract_text() or '' for page in reader.pages)
+                    except Exception as e:
+                        print(f"Failed to read PDF {path}: {e}", file=sys.stderr)
+                        continue
+                elif ext in ('txt','csv'):
+                    with open(path, encoding='utf-8') as f:
+                        text = f.read()
+                else:
+                    continue
+                print(f"[DEBUG] Loaded {path} ({len(text)} chars)")
+                rag.insert(text)
+    else:
+        with open(data_path, encoding="utf-8") as f:
+            data = f.read()
+            print("[DEBUG] Loaded data (first 300 chars):", data[:300])
+            rag.insert(data)
     print("[DEBUG] Chunks after insert:", rag.chunks)
     print("[DEBUG] Embeddings shape:", rag.embeddings.shape)
 
@@ -78,10 +100,14 @@ def main():
         print("[DEBUG] Question:", args.question)
         param = QueryParam(top_k=args.top_k)
         res = await rag.query(args.question, param)
-        print("[DEBUG] Query result:", res)
-        return res
+        # Split into individual answers
+        answers = res.split("\n---\n") if res else []
+        print(f"[DEBUG] Returned {len(answers)} answers (expected top_k={param.top_k})")
+        for idx, ans in enumerate(answers, 1):
+            print(f"Answer {idx}: {ans}")
+        return answers
     result = asyncio.run(debug_query())
-    print("[DEBUG] Final result:", result)
+    print("[DEBUG] Final answers list:", result)
 
 
 if __name__ == "__main__":
