@@ -4,12 +4,14 @@ from crawl4ai.async_configs import BrowserConfig, CrawlerRunConfig
 from model.SCDataset import SCDataset
 from Utils.scraper_utils import parse_markdown
 import os, csv
+import sys
+import re
 
 ###Set up to calling groq model llm 
 '''
 curl https://api.groq.com/openai/v1/chat/completions -s \
 -H "Content-Type: application/json" \
--H "Authorization: Bearer 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" \
+-H "Authorization: Bearer Api_Key" \
 -d '{
 "model": "meta-llama/llama-4-scout-17b-16e-instruct",
 "messages": [{
@@ -50,11 +52,27 @@ async def main():
                 print(f"Error fetching {url}: {e}")
                 continue
             md = result.markdown or ""
-            # parse and write Q&A entries
+            # parse Q&A entries
             rows = parse_markdown(md, url, disease_name)
+            # Helpers
+            def rephrase_question(q, dn):
+                if not q or dn.lower() not in q.lower():
+                    return f"{q.strip()} ({dn})" if q else f"What is {dn}?"
+                return q
+            def verify_entry(entry, dn):
+                txt = (entry.get('answer','') + ' ' + entry.get('question','')).lower()
+                return dn.lower() in txt
+            # Filter and write valid entries
+            valid = []
             for entry in rows:
+                entry['question'] = rephrase_question(entry.get('question',''), disease_name)
+                if verify_entry(entry, disease_name):
+                    valid.append(entry)
+                else:
+                    print(f"Skipping entry for {disease_name} at {url}: not relevant", file=sys.stderr)
+            for entry in valid:
                 writer.writerow([entry["disease_name"], entry["url"], entry["title"], entry["question"], entry["answer"]])
-            print(f"Wrote {len(rows)} entries for {url}")
+            print(f"Wrote {len(valid)} valid entries for {url} (out of {len(rows)})")
     fout.close()
 
 if __name__ == "__main__":

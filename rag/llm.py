@@ -79,3 +79,28 @@ async def groq_embedding(texts, model=None):
     processed = [f"query: {t}" if isinstance(t, str) else str(t) for t in texts]
     emb = model.encode(processed, convert_to_numpy=True, show_progress_bar=False)
     return emb
+
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_community.embeddings import OllamaEmbeddings
+except ImportError:
+    RecursiveCharacterTextSplitter = None
+    OllamaEmbeddings = None
+
+def pdf_langchain_embedding(texts, model=None):
+    """
+    Embed PDF texts via LangChain splitter and OllamaEmbeddings.
+    Each text is split into chunks and embedded.
+    """
+    if RecursiveCharacterTextSplitter is None or OllamaEmbeddings is None:
+        raise ImportError("langchain_text_splitters or langchain_community not installed")
+    # collect chunks
+    all_chunks = []
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, add_start_index=True)
+    for text in texts:
+        chunks = splitter.split_text(text)
+        all_chunks.extend(chunks)
+    # embed
+    embedder = OllamaEmbeddings(model="nomic-embed-text", show_progress=True)
+    embs = embedder.embed_documents(all_chunks)
+    return np.array(embs)
