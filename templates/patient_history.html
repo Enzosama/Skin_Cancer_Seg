@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lịch sử bệnh nhân - Phân tích ung thư da</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lịch sử bệnh nhân</h1>
+            <p>Xem lịch sử phân tích ảnh da của bệnh nhân</p>
+            <a href="/" class="back-btn"><i class="material-icons">arrow_back</i> Quay lại</a>
+        </header>
+
+        <div class="patient-history">
+            <div class="patient-info">
+                <h2>ID: {{ patients[0].id }}</h2>
+                <p>Ngày tạo: {{ patients[0].date }}</p>
+                <p>Trạng thái: {{ patients[0].status }}</p>
+            </div>
+
+            <div class="history-timeline">
+                <h3>Lịch sử phân tích</h3>
+                <div class="timeline-item">
+                    <div class="timeline-date">{{ patients[0].date }}</div>
+                    <div class="timeline-content">
+                        <img src="{{ patients[0].image_url }}" alt="Ảnh bệnh nhân" class="timeline-image">
+                        <div class="timeline-details">
+                            <h4>Kết quả phân tích</h4>
+                            <p>Đang chờ kết quả...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
