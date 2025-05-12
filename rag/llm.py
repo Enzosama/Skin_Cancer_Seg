@@ -51,35 +51,6 @@ def get_e5_model():
         _model = SentenceTransformer("intfloat/multilingual-e5-large-instruct")
     return _model
 
-# Dummy LLM functions (replace with real implementations as needed)
-async def google_complete(prompt: str):
-    return "[Google LLM] Answer to: " + prompt
-
-async def llama_complete(prompt: str):
-    return "[LLaMA LLM] Answer to: " + prompt
-
-async def hugging_face_llm(prompt: str):
-    return "[HuggingFace LLM] Answer to: " + prompt
-
-async def openai_embedding(texts, model=None):
-    model = get_e5_model()
-    # E5 expects "query: ..." or "passage: ..."
-    processed = [f"query: {t}" if isinstance(t, str) else str(t) for t in texts]
-    emb = model.encode(processed, convert_to_numpy=True, show_progress_bar=False)
-    return emb
-
-async def google_embedding(texts, model=None):
-    model = get_e5_model()
-    processed = [f"query: {t}" if isinstance(t, str) else str(t) for t in texts]
-    emb = model.encode(processed, convert_to_numpy=True, show_progress_bar=False)
-    return emb
-
-async def groq_embedding(texts, model=None):
-    model = get_e5_model()
-    processed = [f"query: {t}" if isinstance(t, str) else str(t) for t in texts]
-    emb = model.encode(processed, convert_to_numpy=True, show_progress_bar=False)
-    return emb
-
 try:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from langchain_community.embeddings import OllamaEmbeddings

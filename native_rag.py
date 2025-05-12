@@ -4,8 +4,7 @@ import sys
 from dotenv import load_dotenv
 load_dotenv()
 import torch
-from rag import RAG, QueryParam, google_complete, llama_complete, openai_embedding, google_embedding, groq_embedding
-from rag.llm import hugging_face_embedding
+from rag import RAG, QueryParam, hugging_face_embedding
 from PyPDF2 import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -29,24 +28,46 @@ def get_api_key(service: str):
         sys.exit(1)
     return value
 
-def hugging_face_complete(prompt: str, api_key=None):
-    # Dummy function, replace with actual HF LLM if available
-    return "[HF LLM] Answer to: " + prompt
-
-async def hugging_face_complete_async(prompt: str, api_key=None):
-    return hugging_face_complete(prompt, api_key)
+def load_and_insert_data(rag, data_path):
+    if os.path.isdir(data_path):
+        for root, dirs, files in os.walk(data_path):
+            for fname in files:
+                path = os.path.join(root, fname)
+                ext = fname.lower().rsplit('.',1)[-1]
+                if ext == 'pdf':
+                    try:
+                        reader = PdfReader(path)
+                        text = '\n'.join(page.extract_text() or '' for page in reader.pages)
+                    except Exception as e:
+                        print(f"Failed to read PDF {path}: {e}", file=sys.stderr)
+                        continue
+                    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, add_start_index=True)
+                    pdf_chunks = splitter.split_text(text)
+                    for chunk in pdf_chunks:
+                        rag.insert(chunk)
+                    continue
+                elif ext in ('txt','csv'):
+                    with open(path, encoding='utf-8') as f:
+                        text = f.read()
+                    rag.insert(text)
+                else:
+                    print(f"Unsupported file type: {ext}", file=sys.stderr)
+                    continue
+    else:
+        with open(data_path, encoding="utf-8") as f:
+            data = f.read()
+            rag.insert(data)
 
 def main():
     parser = argparse.ArgumentParser(description="Run NativeRag on a Skin Cancer dataset.")
     parser.add_argument("--working_dir", default="./rag_cache")
     parser.add_argument("--data_file", default="Data", help="Path to data file or directory")
     parser.add_argument("--question", required=True)
-    parser.add_argument("--engine", choices=["google", "llama", "hugging_face"], default="google")
-    parser.add_argument("--embed_engine", choices=["openai", "google", "groq", "hugging_face"], default="openai")
+    parser.add_argument("--engine", choices=["google"], default="google")
+    parser.add_argument("--embed_engine", choices=["openai", "hugging_face"], default="hugging_face")
     parser.add_argument("--top_k", type=int, default=5)
     args = parser.parse_args()
 
-    # Select LLM function: luôn trả về nguyên prompt (không wrap, không gọi LLM dummy)
     llm_func = lambda prompt: prompt
 
     # Select embedding function with API key routing
@@ -67,39 +88,10 @@ def main():
 
     # Ingest data (file or directory)
     data_path = args.data_file
-    if os.path.isdir(data_path):
-        for root, dirs, files in os.walk(data_path):
-            for fname in files:
-                path = os.path.join(root, fname)
-                ext = fname.lower().rsplit('.',1)[-1]
-                if ext == 'pdf':
-                    try:
-                        reader = PdfReader(path)
-                        text = '\n'.join(page.extract_text() or '' for page in reader.pages)
-                    except Exception as e:
-                        print(f"Failed to read PDF {path}: {e}", file=sys.stderr)
-                        continue
-                    # Chunk PDF into manageable segments
-                    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, add_start_index=True)
-                    pdf_chunks = splitter.split_text(text)
-                    for chunk in pdf_chunks:
-                        print(f"[DEBUG] Loaded PDF chunk ({len(chunk)} chars)")
-                        rag.insert(chunk)
-                    continue
-                elif ext in ('txt','csv'):
-                    with open(path, encoding='utf-8') as f:
-                        text = f.read()
-                    print(f"[DEBUG] Loaded {path} ({len(text)} chars)")
-                    rag.insert(text)
-                else:
-                    continue
-    else:
-        with open(data_path, encoding="utf-8") as f:
-            data = f.read()
-            print("[DEBUG] Loaded data (first 300 chars):", data[:300])
-            rag.insert(data)
+    load_and_insert_data(rag, data_path)
     print("[DEBUG] Chunks after insert:", rag.chunks)
-    print("[DEBUG] Embeddings shape:", rag.embeddings.shape)
+    if hasattr(rag, 'embeddings'):
+        print("[DEBUG] Embeddings shape:", getattr(rag.embeddings, 'shape', 'N/A'))
 
     # Query and print result
     import asyncio
@@ -115,7 +107,6 @@ def main():
         return answers
     result = asyncio.run(debug_query())
     print("[DEBUG] Final answers list:", result)
-
 
 if __name__ == "__main__":
     main()

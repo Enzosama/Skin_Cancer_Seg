@@ -96,7 +96,6 @@ def upload_file():
         filename = secure_filename(file.filename)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
-        
         # Get predictions from AI model
         predictions = get_predictions(file_path)
         
