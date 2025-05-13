@@ -6,32 +6,8 @@ load_dotenv()
 import torch
 from cot_rag import CoTRAG
 from rag import QueryParam
-from rag.llm import hugging_face_embedding
+from rag.llm import hugging_face_embedding, get_api_key, get_llm_func, get_embedding_func
 from PyPDF2 import PdfReader
-
-def get_api_key(service: str):
-    env_map = {
-        "google": "GOOGLE_API_KEY",
-        "groq": "GROQ_API_KEY",
-        "openai_github": "OPENAI_GITHUB_API_KEY",
-        "deepseek": "DEEPSEEK_API_KEY",
-        "hugging_face": "HUGGING_FACE_API_KEY",
-        "openai": "OPENAI_API_KEY",
-    }
-    key = env_map.get(service)
-    if not key:
-        raise ValueError(f"No API key mapping for service {service}")
-    value = os.environ.get(key)
-    if not value:
-        print(f"Missing API key for {service} ({key})", file=sys.stderr)
-        sys.exit(1)
-    return value
-
-def hugging_face_complete(prompt: str, api_key=None):
-    return "[HF LLM] Answer to: " + prompt
-
-async def hugging_face_complete_async(prompt: str, api_key=None):
-    return hugging_face_complete(prompt, api_key)
 
 def load_and_insert_data_cotrag(co_trag, data_path):
     if os.path.isdir(data_path):
@@ -60,33 +36,26 @@ def load_and_insert_data_cotrag(co_trag, data_path):
 async def cotrag_query(question, co_trag, top_k=5):
     param = QueryParam(top_k=top_k)
     res = await co_trag.query(question, param)
-    return res
+    if isinstance(res, (list, tuple)):
+        if all(isinstance(x, (float, int)) for x in res):
+            if hasattr(res, 'any'):  # Handle numpy arrays
+                return "Không thể trả về kết quả dạng vector, vui lòng thử lại với câu hỏi khác."
+            return "Không thể trả về kết quả dạng vector, vui lòng thử lại với câu hỏi khác."
+        return '\n'.join(str(x) for x in res)
+    return str(res) if res else "Không tìm thấy kết quả phù hợp"
 
 def main():
     parser = argparse.ArgumentParser(description="Run CoT-RAG on a Skin Cancer dataset.")
     parser.add_argument("--working_dir", default="./rag_cache")
     parser.add_argument("--data_file", default="Data", help="Path to data file or directory")
     parser.add_argument("--question", required=True)
-    parser.add_argument("--engine", choices=["google", "llama", "hugging_face"], default="google")
-    parser.add_argument("--embed_engine", choices=["openai", "google", "groq", "hugging_face"], default="openai")
+    parser.add_argument("--engine", choices=["google", "llama", "hugging_face", "openai_github"], default="google")
+    parser.add_argument("--embed_engine", choices=["openai", "google", "groq", "hugging_face", "openai_github"], default="openai")
     parser.add_argument("--top_k", type=int, default=5)
     args = parser.parse_args()
 
-    llm_func = lambda prompt: prompt
-
-    if args.embed_engine == "openai":
-        api_key = get_api_key("openai")
-        emb_func = lambda texts: __import__('rag').rag.openai_embedding(texts, api_key=api_key)
-    elif args.embed_engine == "hugging_face":
-        emb_func = lambda texts: hugging_face_embedding(texts)
-    elif args.embed_engine == "google":
-        api_key = get_api_key("google")
-        emb_func = lambda texts: __import__('rag').rag.google_embedding(texts, api_key=api_key)
-    elif args.embed_engine == "groq":
-        api_key = get_api_key("groq")
-        emb_func = lambda texts: __import__('rag').rag.groq_embedding(texts, api_key=api_key)
-    else:
-        raise ValueError(f"Unknown embed_engine: {args.embed_engine}")
+    llm_func = get_llm_func(args.engine)
+    emb_func = get_embedding_func(args.embed_engine)
 
     co_trag = CoTRAG(
         working_dir=args.working_dir,

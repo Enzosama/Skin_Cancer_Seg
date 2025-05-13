@@ -7,7 +7,9 @@ from werkzeug.utils import secure_filename
 import cv2
 import numpy as np
 import tensorflow as tf
-    
+from graph import compiled_graph
+import asyncio
+
 # Create Flask app
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
@@ -107,24 +109,29 @@ def upload_file():
     
     return jsonify({'error': 'File type not allowed'}), 400
 
-#Demo chatbot
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
     user_message = data.get('message', '')
-    
-    # Mock chat responses
-    responses = [
-        "I can help you understand what objects the AI model can detect in your images!",
-        "You can upload an image by dragging and dropping it or clicking the 'Choose File' button.",
-        "The AI model can identify various objects, animals, and scenes in images.",
-        "If you have questions about the prediction results, feel free to ask!",
-        "This model works best with clear, well-lit images.",
-        "You can upload a new image anytime by clicking the 'Upload New Image' button."
-    ]
-
-    bot_response = random.choice(responses)
-    return jsonify({'response': bot_response})
+    # Chuẩn bị state đầu vào cho pipeline
+    state = {
+        "query": user_message,
+        "semantic_result": "",
+        "rag_result": "",
+        "cot_rag_result": "",
+        "final_result": "",
+        "route": "",
+    }
+    # Gọi pipeline xử lý bất đồng bộ
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(compiled_graph.ainvoke(state))
+        loop.close()
+        response_text = result.get("final_result", "Không có kết quả.")
+    except Exception as e:
+        response_text = f"Lỗi xử lý: {str(e)}"
+    return jsonify({'response': response_text})
 
 if __name__ == '__main__':
     app.run(debug=True)

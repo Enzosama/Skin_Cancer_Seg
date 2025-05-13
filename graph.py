@@ -1,12 +1,31 @@
 import os
+import sys
 from typing import TypedDict, Literal
 from langgraph.graph import StateGraph, START, END
 from rag.rag import RAG, QueryParam
-from rag.llm import hugging_face_embedding, google_embedding
-from cot_rag import CoTRAG, load_and_insert_data_cotrag, cotrag_query
+from rag.llm import hugging_face_embedding
+from cothought_rag import CoTRAG, load_and_insert_data_cotrag, cotrag_query
 from native_rag import load_and_insert_data
 # from dotenv import load_dotenv 
 # load_dotenv()
+
+def get_api_key(service: str):
+    env_map = {
+        "google": "GOOGLE_API_KEY",
+        "groq": "GROQ_API_KEY",
+        "openai_github": "OPENAI_GITHUB_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "hugging_face": "HUGGING_FACE_API_KEY",
+        "openai": "OPENAI_API_KEY",
+    }
+    key = env_map.get(service)
+    if not key:
+        raise ValueError(f"No API key mapping for service {service}")
+    value = os.environ.get(key)
+    if not value:
+        print(f"Missing API key for {service} ({key})", file=sys.stderr)
+        sys.exit(1)
+    return value
 
 class AgentState(TypedDict):
     query: str
@@ -15,6 +34,7 @@ class AgentState(TypedDict):
     cot_rag_result: str
     final_result: str
     route: str
+    engine: str
 
 # Node 1: Semantic search 
 pathmap = {
@@ -42,21 +62,42 @@ def node_1(state: AgentState):
         "route": route
     }
 
+# Hàm chọn llm_model_func dựa trên engine
+from rag.llm import hugging_face_llm
+
+def get_llm_func(engine: str):
+    if engine == "google":
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        if api_key:
+            return lambda prompt: hugging_face_embedding([prompt])[0]
+        return hugging_face_embedding
+    else:
+        # fallback: echo prompt
+        return lambda prompt: prompt
+
 # Node 2 RAG
 async def node_2(state: AgentState):
     print("---Node 2: RAG---")
     try:
         data_dir = os.path.join('Data')
+        engine = state.get("engine", "google")
+        llm_func = get_llm_func(engine)
+        emb_func = hugging_face_embedding
+        
         rag = RAG(
             working_dir='.',
-            llm_model_func=google_embedding,
-            embedding_func=hugging_face_embedding
+            llm_model_func=llm_func,
+            embedding_func=emb_func
         )
         load_and_insert_data(rag, data_dir)
+        
         if rag.chunks:
             param = QueryParam(top_k=5)
             rag_result = await rag.query(state["query"], param)
-            route = "node_3" if rag_result else "node_4"
+            if rag_result and "\think" in state["query"]:
+                route = "node_3"
+            else:
+                route = "node_4"
         else:
             rag_result = "Không có dữ liệu tham khảo."
             route = "node_4"
@@ -73,14 +114,29 @@ async def node_2(state: AgentState):
 async def node_3(state: AgentState):
     print("---Node 3: CoT-RAG---")
     try:
+        from rag.llm import get_llm_func, get_embedding_func
+        engine = state.get("engine", "google")
+        embed_engine = state.get("embed_engine", "hugging_face") if "embed_engine" in state else "hugging_face"
+        top_k = state.get("top_k", 5)
+        llm_func = get_llm_func(engine)
+        emb_func = get_embedding_func(embed_engine)
         cotrag = CoTRAG(
             working_dir='.',
-            llm_model_func=hugging_face_llm,
-            embedding_func=hugging_face_embedding
+            llm_model_func=llm_func,
+            embedding_func=emb_func
         )
         data_dir = os.path.join('Data')
         load_and_insert_data_cotrag(cotrag, data_dir)
-        cot_rag_result = await cotrag_query(state["query"], cotrag)
+        cot_rag_result = await cotrag_query(state["query"], cotrag, top_k=top_k)
+        # Đảm bảo trả về chuỗi text
+        if not isinstance(cot_rag_result, str):
+            try:
+                import numpy as np
+                if isinstance(cot_rag_result, np.ndarray):
+                    cot_rag_result = cot_rag_result.tolist()
+                cot_rag_result = str(cot_rag_result)
+            except Exception:
+                cot_rag_result = str(cot_rag_result)
         final_result = cot_rag_result
         route = "end"
     except Exception as e:
@@ -89,8 +145,8 @@ async def node_3(state: AgentState):
         route = "node_4"
     return {
         **state,
-        "cot_rag_result": str(cot_rag_result),
-        "final_result": str(final_result),
+        "cot_rag_result": cot_rag_result,
+        "final_result": final_result,
         "route": route
     }
 
@@ -134,7 +190,7 @@ if __name__ == "__main__":
         "rag_result": "",
         "cot_rag_result": "",
         "final_result": "",
-        "route": ""
+        "route": "",
     }
     async def main():
         result = await compiled_graph.ainvoke(inputs)

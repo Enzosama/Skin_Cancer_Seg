@@ -49,3 +49,17 @@ class CoTRAG(RAG):
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, self.llm_model_func, prompt)
         return result
+
+def load_and_insert_data_cotrag(cotrag, data_dir):
+    """
+    Hàm này dùng để load dữ liệu và insert vào CoTRAG instance.
+    """
+    # Giả định có hàm load_data_from_dir trả về list các chunk
+    from rag.utils import load_data_from_dir
+    chunks = load_data_from_dir(data_dir)
+    cotrag.insert_chunks(chunks)
+
+# Định nghĩa hàm cotrag_query
+async def cotrag_query(query, cotrag):
+    param = QueryParam(top_k=5)
+    return await cotrag.query(query, param)

@@ -1,1 +1,1 @@
-from .rag import CoTRAG
+from .rag import CoTRAG, load_and_insert_data_cotrag, cotrag_query

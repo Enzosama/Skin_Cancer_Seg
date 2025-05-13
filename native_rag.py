@@ -63,20 +63,36 @@ def main():
     parser.add_argument("--working_dir", default="./rag_cache")
     parser.add_argument("--data_file", default="Data", help="Path to data file or directory")
     parser.add_argument("--question", required=True)
-    parser.add_argument("--engine", choices=["google"], default="google")
-    parser.add_argument("--embed_engine", choices=["openai", "hugging_face"], default="hugging_face")
+    parser.add_argument("--engine", choices=["google", "openai_github"], default="google")
+    parser.add_argument("--embed_engine", choices=["openai_github", "hugging_face"], default="hugging_face")
     parser.add_argument("--top_k", type=int, default=5)
     args = parser.parse_args()
 
     llm_func = lambda prompt: prompt
 
-    # Select embedding function with API key routing
+    if args.engine == "google":
+        api_key = get_api_key("google")
+        from rag.llm import google_engine
+        llm_func = lambda prompt: google_engine(prompt, api_key=api_key)
+    elif args.engine == "openai_github":
+        token = get_api_key("openai_github")
+        from rag.llm import openai_github_engine
+        llm_func = lambda prompt: openai_github_engine(prompt, api_key=token)
+
     if args.embed_engine == "openai":
         api_key = get_api_key("openai")
+        from rag import openai_embedding
         emb_func = lambda texts: openai_embedding(texts, api_key=api_key)
     elif args.embed_engine == "hugging_face":
-        # hugging_face_embedding does NOT accept api_key, only pass texts
         emb_func = lambda texts: hugging_face_embedding(texts)
+    elif args.embed_engine == "google":
+        api_key = get_api_key("google")
+        from rag.llm import google_embedding
+        emb_func = lambda texts: google_embedding(texts, api_key=api_key)
+    elif args.embed_engine == "openai_github":
+        token = get_api_key("openai_github")
+        from rag.llm import openai_github_embedding
+        emb_func = lambda texts: openai_github_embedding(texts, api_key=token)
     else:
         raise ValueError(f"Unknown embed_engine: {args.embed_engine}")
 
