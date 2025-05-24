@@ -21,7 +21,7 @@ def call_groq_llama(question, answer, disease_name, model="llama-3.3-70b-versati
         completion = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "Bạn là chuyên gia y tế về chủ đề bệnh học."},
+                {"role": "system", "content": "Bạn là chuyên gia y tế về chủ đề ung thư gia."},
                 {"role": "user", "content": prompt},
             ],
             max_tokens=10,
