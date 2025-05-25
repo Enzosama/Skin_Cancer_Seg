@@ -62,7 +62,6 @@ async def main():
             def verify_entry(entry, dn):
                 txt = (entry.get('answer','') + ' ' + entry.get('question','')).lower()
                 return dn.lower() in txt
-            # Filter and write valid entries
             valid = []
             for entry in rows:
                 entry['question'] = rephrase_question(entry.get('question',''), disease_name)
