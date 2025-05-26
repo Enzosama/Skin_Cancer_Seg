@@ -63,7 +63,7 @@ class RAGBenchmark:
             process = psutil.Process(os.getpid())
             return process.memory_info().rss / 1024 / 1024  # Convert to MB
         except ImportError:
-            return 0.0  # psutil not available
+            return 0.0 
     
     def benchmark_original_rag(self, queries: List[str]) -> List[BenchmarkResult]:
         """Benchmark original RAG implementation"""
@@ -74,13 +74,9 @@ class RAGBenchmark:
             print(f"\nTest {i+1}/{len(queries)}: {query}")
             
             try:
-                # Measure memory before
                 memory_before = self.measure_memory_usage()
-                
-                # Time the operation
                 start_time = time.time()
                 
-                # Create RAG instance
                 rag = RAG(
                     working_dir="./rag_cache_original",
                     llm_model_func=self.llm_func,

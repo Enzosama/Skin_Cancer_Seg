@@ -220,7 +220,6 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
                         confidence=confidence
                     ))
                 
-                # Start new step
                 try:
                     step_parts = line.split(':', 1)
                     step_num = int(step_parts[0].replace('Step', '').strip())
@@ -233,7 +232,6 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
                 if line:  # Skip empty lines
                     current_reasoning.append(line)
         
-        # Add final step
         if current_step is not None:
             confidence = self._estimate_step_confidence(current_reasoning, question_type)
             steps.append(CoTStep(
@@ -358,8 +356,20 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
             
             # Step 5: Extract final answer
             final_answer = self._extract_final_answer(llm_response, reasoning_steps)
+            # Step 6: Extract patient-friendly answer (if available)
+            patient_friendly_answer = self._extract_patient_friendly_answer(llm_response)
+            # Create result
+            result = CoTResult(
+                final_answer=final_answer,
+                reasoning_steps=reasoning_steps,
+                total_steps=len(reasoning_steps),
+                confidence_score=overall_confidence,
+                sources_used=sources_used,
+                reasoning_chain=reasoning_chain
+            )
+            result.patient_friendly_answer = patient_friendly_answer
             
-            # Step 6: Calculate confidence
+            # Calculate confidence
             overall_confidence = self._calculate_overall_confidence(reasoning_steps)
             
             # Step 7: Create reasoning chain
@@ -415,20 +425,26 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
             )
     
     def _extract_final_answer(self, llm_response: str, reasoning_steps: List[CoTStep]) -> str:
-        """Extract final answer from LLM response"""
-        # Look for explicit final answer
+        """Extract final answer from LLM response, without label"""
         lines = llm_response.split('\n')
         for line in lines:
             if 'final answer' in line.lower() and ':' in line:
+                # Remove label and return only the answer content
                 return line.split(':', 1)[1].strip()
-        
         # If no explicit final answer, use last reasoning step
         if reasoning_steps:
             return reasoning_steps[-1].reasoning
-        
         # Fallback: use last substantial paragraph
         paragraphs = [p.strip() for p in llm_response.split('\n\n') if p.strip()]
         return paragraphs[-1] if paragraphs else "Unable to generate final answer."
+
+    def _extract_patient_friendly_answer(self, llm_response: str) -> str:
+        """Extract patient-friendly answer from LLM response"""
+        lines = llm_response.split('\n')
+        for line in lines:
+            if 'patient-friendly answer' in line.lower() and ':' in line:
+                return line.split(':', 1)[1].strip()
+        return ""
     
     def _create_reasoning_chain(self, reasoning_steps: List[CoTStep]) -> str:
         """Create a readable reasoning chain"""

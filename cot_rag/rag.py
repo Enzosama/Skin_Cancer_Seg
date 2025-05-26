@@ -1,6 +1,7 @@
 import numpy as np
 import asyncio
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from rag.rag import RAG, QueryParam
@@ -49,16 +50,34 @@ class CoTRAG(RAG):
         system_prompt = get_system_prompt()
         
         cot_instructions = """
-You are an expert medical assistant. Follow these steps to provide a comprehensive answer:
+You are an expert dermatologist specializing in skin cancer. Follow these steps to provide a comprehensive answer:
 
-1. Understanding: First, clearly understand what the question is asking
-2. Analysis: Break down the question into key components
-3. Context Review: Examine the provided context for relevant information
-4. Reasoning: Think through the problem step by step
-5. Synthesis: Combine your reasoning with the context to form a conclusion
-6. Final Answer: Provide a clear, concise final answer
+1. Understanding: First, clearly understand what the question is asking about skin conditions or cancer
+2. Analysis: Break down the question into key medical components and identify relevant skin cancer concepts
+3. Context Review: Carefully examine the provided medical context for relevant diagnostic or treatment information
+4. Medical Reasoning: Think through the medical aspects step by step, considering differential diagnoses when appropriate
+5. Evidence-Based Synthesis: Combine your reasoning with the medical literature to form a conclusion supported by evidence
+6. Patient-Friendly Answer: Provide a clear, concise final answer that would be appropriate for patient education
 
-For each step, explain your thinking process clearly."""
+For each step, explain your medical reasoning process clearly, citing specific information from the provided context.
+
+When analyzing skin conditions:
+- Consider the ABCDE criteria for melanoma evaluation when relevant
+- Distinguish between benign and malignant characteristics
+- Reference appropriate diagnostic procedures and treatment options
+- Note when further medical consultation would be necessary
+"""
+        
+        # Check if context contains medical document format and enhance the prompt
+        if "Title:" in context and any(term in context.lower() for term in ["melanoma", "carcinoma", "nevus", "mole", "skin cancer", "lesion"]):
+            medical_context_note = """
+Note: The provided context contains medical information from reputable sources. Pay special attention to:
+- Clinical descriptions of skin conditions
+- Diagnostic criteria and warning signs
+- Treatment recommendations and guidelines
+- Statistical information about prevalence and risk factors
+"""
+            cot_instructions += medical_context_note
         
         prompt = f"""{system_prompt}
 
@@ -77,22 +96,52 @@ Step {step_number}: Understanding the Question
         return prompt
     
     def _parse_reasoning_steps(self, llm_response: str) -> List[CoTStep]:
-        """Parse the LLM response to extract individual reasoning steps."""
+        """Parse the LLM response to extract individual reasoning steps with enhanced medical content handling."""
         steps = []
         lines = llm_response.split('\n')
         current_step = None
         current_reasoning = []
+        current_context = []
+        in_context_section = False
+        confidence_score = None
         
         for line in lines:
             line = line.strip()
+            
+            # Check for confidence indicators in medical reasoning
+            if any(term in line.lower() for term in ['confidence:', 'certainty:', 'confidence level:', 'medical certainty:']):
+                try:
+                    # Extract confidence value if present (e.g., "Confidence: 0.8" or "Confidence: High (0.9)")
+                    conf_match = re.search(r'\b(\d+(\.\d+)?)\b', line)
+                    if conf_match:
+                        confidence_score = float(conf_match.group(1))
+                        if confidence_score > 1.0:  # Normalize if on a 0-100 scale
+                            confidence_score /= 100.0
+                except (ValueError, AttributeError):
+                    pass
+            
+            # Detect context reference sections
+            if any(marker in line.lower() for marker in ['from context:', 'reference:', 'according to:', 'source states:', 'medical literature:']):
+                in_context_section = True
+                continue
+            elif in_context_section and (not line or line.startswith('Step ') or 'conclusion:' in line.lower()):
+                in_context_section = False
+            
             if line.startswith('Step ') and ':' in line:
                 # Save previous step if exists
                 if current_step is not None:
                     steps.append(CoTStep(
                         step_number=current_step['number'],
                         description=current_step['description'],
-                        reasoning='\n'.join(current_reasoning).strip()
+                        reasoning='\n'.join(current_reasoning).strip(),
+                        retrieved_context='\n'.join(current_context).strip() if current_context else None,
+                        confidence=confidence_score
                     ))
+                
+                # Reset for new step
+                current_context = []
+                confidence_score = None
+                in_context_section = False
                 
                 # Start new step
                 try:
@@ -105,14 +154,19 @@ Step {step_number}: Understanding the Question
                     current_reasoning.append(line)
             else:
                 if line:
-                    current_reasoning.append(line)
+                    if in_context_section:
+                        current_context.append(line)
+                    else:
+                        current_reasoning.append(line)
         
         # Add final step
         if current_step is not None:
             steps.append(CoTStep(
                 step_number=current_step['number'],
                 description=current_step['description'],
-                reasoning='\n'.join(current_reasoning).strip()
+                reasoning='\n'.join(current_reasoning).strip(),
+                retrieved_context='\n'.join(current_context).strip() if current_context else None,
+                confidence=confidence_score
             ))
         
         return steps
@@ -173,16 +227,7 @@ Step {step_number}: Understanding the Question
         return min(overall_confidence, 1.0)
 
     async def query(self, question: str, param: QueryParam = QueryParam()) -> CoTResult:
-        """
-        Enhanced Chain-of-Thought query with structured reasoning and result validation.
-        
-        Args:
-            question: The input question
-            param: Query parameters including top_k for retrieval
-            
-        Returns:
-            CoTResult: Structured result with reasoning steps and final answer
-        """
+        """Enhanced query method with Chain of Thought reasoning optimized for medical content."""
         try:
             # Step 1: Embed question
             q_emb_arr = self.embedding_func([question])
@@ -199,7 +244,7 @@ Step {step_number}: Understanding the Question
             
             if len(top_idx) == 0:
                 return CoTResult(
-                    final_answer="No relevant information found in the knowledge base.",
+                    final_answer="No relevant medical information found in the knowledge base.",
                     reasoning_steps=[],
                     total_steps=0,
                     confidence_score=0.0,
@@ -209,9 +254,26 @@ Step {step_number}: Understanding the Question
 
             # Step 3: Build context and calculate relevance
             context_chunks = [self.chunks[i] for i in top_idx]
-            context = "\n\n".join(context_chunks)
             
-            # Simple context relevance calculation (can be enhanced)
+            # For medical content, enhance context with source information
+            enhanced_chunks = []
+            for i, chunk in enumerate(context_chunks):
+                # Check if this is from the medical content format
+                if chunk.startswith("Title:"):
+                    # Add source number for reference
+                    enhanced_chunks.append(f"Source {i+1}:\n{chunk}")
+                else:
+                    enhanced_chunks.append(chunk)
+            
+            context = "\n\n".join(enhanced_chunks)
+            
+            # Detect if this is a medical question
+            is_medical_question = any(term in question.lower() for term in [
+                "skin", "cancer", "melanoma", "carcinoma", "mole", "nevus", "lesion", 
+                "dermatology", "biopsy", "treatment", "diagnosis", "symptom", "abcde"
+            ])
+            
+            # Simple context relevance calculation
             question_words = set(question.lower().split())
             context_words = set(context.lower().split())
             context_relevance = len(question_words.intersection(context_words)) / len(question_words) if question_words else 0.0
@@ -231,8 +293,21 @@ Step {step_number}: Understanding the Question
             # Step 6: Extract final answer
             final_answer = self._extract_final_answer(llm_response)
             
-            # Step 7: Calculate confidence
+            # Step 7: Calculate confidence with enhanced medical content awareness
             confidence_score = self._calculate_confidence(reasoning_steps, context_relevance)
+            
+            # For medical content, adjust confidence based on source quality
+            if is_medical_question:
+                medical_source_bonus = 0.0
+                for chunk in context_chunks:
+                    if any(term in chunk.lower() for term in ["yale medicine", "mayo clinic", "nih", "pubmed", "journal", "research"]):
+                        medical_source_bonus += 0.05  # Bonus for reputable medical sources
+                
+                confidence_score = min(1.0, confidence_score + medical_source_bonus)  # Cap at 1.0
+                
+                # For medical content, add a disclaimer if confidence is low
+                if confidence_score < 0.7:
+                    final_answer += "\n\nNote: This information is provided for educational purposes only and should not replace professional medical advice. Please consult with a healthcare provider for diagnosis and treatment."
             
             # Step 8: Create structured result
             result = CoTResult(

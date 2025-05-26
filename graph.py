@@ -48,8 +48,9 @@ pathmap = {
 def node_1(state: AgentState):
     print("---Node 1: Semantic Search ---")
     query = state["query"]
-    if "\\think" in query:
-        semantic_result = "Chuyển trực tiếp sang CoT-RAG do truy vấn chứa từ khóa \\think."
+    # Check if the query contains \think at the beginning or end of the sentence
+    if query.strip().startswith("\\think") or query.strip().endswith("\\think"):
+        semantic_result = "Chuyển trực tiếp sang CoT-RAG do truy vấn chứa từ khóa \\think ở đầu hoặc cuối câu."
         route = "node_3"
         return {
             **state,
@@ -91,7 +92,6 @@ def node_1(state: AgentState):
         "route": route
     }
 
-# Hàm chọn llm_model_func dựa trên engine
 from rag.llm import hugging_face_llm
 
 def get_llm_func(engine: str):
@@ -106,7 +106,7 @@ def get_llm_func(engine: str):
 
 # Node 2 RAG
 async def node_2(state: AgentState):
-    print("---Node 2: Optimized RAG---")
+    print("---Node 2: RAG---")
     try:
         data_dir = os.path.join('Data')
         engine = state.get("engine", "google")
@@ -121,7 +121,6 @@ async def node_2(state: AgentState):
             enable_cache=True
         )
         
-        # Load and insert data (with caching)
         load_and_insert_data(rag, data_dir)
         
         if rag.chunks:
@@ -132,16 +131,24 @@ async def node_2(state: AgentState):
                 and (state.get("semantic_result", "").upper().find("UNSUPPORTED") != -1 or state.get("semantic_result", "").find("không tìm thấy thông tin liên quan".lower()) != -1)
             ):
                 route = "node_4"
-            elif "\\think" in state["query"]:
-                route = "node_3"
+            # Check if the query contains \think at the beginning or end of the sentence
+            elif state["query"].strip().startswith("\\think") or state["query"].strip().endswith("\\think"):
+                route = "node_3" 
             else:
-                route = "node_3"
+
+                route = "end"  
+                state["final_result"] = rag_result 
         else:
             rag_result = "Không có dữ liệu tham khảo."
             if state.get("semantic_result", "").upper().find("UNSUPPORTED") != -1 or state.get("semantic_result", "").find("không tìm thấy thông tin liên quan".lower()) != -1:
                 route = "node_4"
             else:
-                route = "node_3"
+                # Check if the query contains \think at the beginning or end of the sentence
+                if state["query"].strip().startswith("\\think") or state["query"].strip().endswith("\\think"):
+                    route = "node_3"  # Use CoT-RAG for queries with \think
+                else:
+                    route = "end"  # Skip node_3 for regular queries
+                    state["final_result"] = rag_result  # Set the final result to the RAG result
     except Exception as e:
         rag_result = f"Lỗi RAG: {e}"
         route = "node_4"
@@ -153,7 +160,7 @@ async def node_2(state: AgentState):
 
 # Node 3: Sử dụng CoT-RAG
 async def node_3(state: AgentState):
-    print("---Node 3: Optimized CoT-RAG---")
+    print("---Node 3: CoT-RAG---")
     try:
         from rag.llm import get_llm_func, get_embedding_func
         engine = state.get("engine", "google")
@@ -218,7 +225,7 @@ def node_4(state: AgentState):
 def decision_node(state: AgentState) -> Literal["node_2", "node_4"]:
     return state.get("route", "node_4")
 
-def decision_node_2(state: AgentState) -> Literal["node_3", "node_4"]:
+def decision_node_2(state: AgentState) -> Literal["node_3", "node_4", "end"]:
     return state.get("route", "node_4")
 
 def decision_node_3(state: AgentState) -> Literal["end", "node_4"]:
@@ -232,7 +239,7 @@ builder.add_node("node_4", node_4)
 
 builder.add_edge(START, "node_1")
 builder.add_conditional_edges("node_1", decision_node, {"node_2": "node_2", "node_4": "node_4"})
-builder.add_conditional_edges("node_2", decision_node_2, {"node_3": "node_3", "node_4": "node_4"})
+builder.add_conditional_edges("node_2", decision_node_2, {"node_3": "node_3", "node_4": "node_4", "end": END})
 builder.add_conditional_edges("node_3", decision_node_3, {"end": END, "node_4": "node_4"})
 builder.add_edge("node_4", END)
 

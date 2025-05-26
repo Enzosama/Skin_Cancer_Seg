@@ -19,18 +19,9 @@ class CacheConfig:
     chunks_cache_file: str = "chunks.pkl"
     index_cache_file: str = "faiss_index.bin"
     enable_cache: bool = True
-    cache_ttl: int = 86400  # 24 hours in seconds
+    cache_ttl: int = 86400  # 24 hours 
 
-class OptimizedRAG(RAG):
-    """
-    Optimized RAG implementation with:
-    - FAISS vector indexing for faster similarity search
-    - Persistent caching of embeddings and chunks
-    - Batch processing for embeddings
-    - Memory-efficient data loading
-    - Query result caching
-    """
-    
+class OptimizedRAG(RAG):   
     def __init__(self, working_dir: str, llm_model_func, embedding_func, cache_config: Optional[CacheConfig] = None):
         super().__init__(working_dir, llm_model_func, embedding_func)
         self.cache_config = cache_config or CacheConfig(cache_dir=working_dir)
@@ -234,7 +225,6 @@ class OptimizedRAG(RAG):
     
     async def query(self, question: str, param: QueryParam = QueryParam()):
         """Optimized query with caching and parallel processing"""
-        # Check query cache
         query_hash = self._get_query_hash(question, param)
         if query_hash in self.query_cache:
             print(f"[CACHE] Query cache hit")
