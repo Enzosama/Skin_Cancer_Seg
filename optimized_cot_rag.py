@@ -353,11 +353,14 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
             
             # Parse reasoning steps
             reasoning_steps = self._parse_reasoning_steps_optimized(llm_response, question_type)
-            
+            # Calculate confidence
+            overall_confidence = self._calculate_overall_confidence(reasoning_steps)
             # Step 5: Extract final answer
             final_answer = self._extract_final_answer(llm_response, reasoning_steps)
             # Step 6: Extract patient-friendly answer (if available)
             patient_friendly_answer = self._extract_patient_friendly_answer(llm_response)
+            # Step 7: Create reasoning chain
+            reasoning_chain = self._create_reasoning_chain(reasoning_steps)
             # Create result
             result = CoTResult(
                 final_answer=final_answer,
@@ -368,22 +371,6 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
                 reasoning_chain=reasoning_chain
             )
             result.patient_friendly_answer = patient_friendly_answer
-            
-            # Calculate confidence
-            overall_confidence = self._calculate_overall_confidence(reasoning_steps)
-            
-            # Step 7: Create reasoning chain
-            reasoning_chain = self._create_reasoning_chain(reasoning_steps)
-            
-            # Create result
-            result = CoTResult(
-                final_answer=final_answer,
-                reasoning_steps=reasoning_steps,
-                total_steps=len(reasoning_steps),
-                confidence_score=overall_confidence,
-                sources_used=sources_used,
-                reasoning_chain=reasoning_chain
-            )
             
             # Cache the result
             self.cot_results_cache[cot_query_hash] = result
@@ -427,13 +414,49 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
     def _extract_final_answer(self, llm_response: str, reasoning_steps: List[CoTStep]) -> str:
         """Extract final answer from LLM response, without label"""
         lines = llm_response.split('\n')
+        template_instructions = [
+            "Provide a comprehensive definition.", 
+            "Provide a clear process explanation.", 
+            "Explain the causal relationship.", 
+            "Provide treatment recommendations.", 
+            "Describe the symptoms and their significance.", 
+            "Provide diagnostic guidance.", 
+            "Provide a comprehensive response."
+        ]
+        
         for line in lines:
             if 'final answer' in line.lower() and ':' in line:
                 # Remove label and return only the answer content
-                return line.split(':', 1)[1].strip()
+                answer = line.split(':', 1)[1].strip()
+                # Check if the answer is empty or just contains whitespace
+                if not answer.strip():
+                    # If we find "Final Answer:" with nothing after it, look for content in the next lines
+                    next_line_index = lines.index(line) + 1
+                    if next_line_index < len(lines):
+                        # Get the next non-empty line
+                        for next_line in lines[next_line_index:]:
+                            if next_line.strip():
+                                answer = next_line.strip()
+                                break
+                    # If still empty, continue looking for another "Final Answer:" line
+                    if not answer.strip():
+                        continue
+                # Check if the answer is just a template instruction and not actual content
+                if answer in template_instructions:
+                    # Skip template answers and continue looking
+                    continue
+                # Check if the answer starts with any template instruction
+                if any(answer.startswith(instr) for instr in template_instructions):
+                    # Skip the template part and return the rest
+                    for instr in template_instructions:
+                        if answer.startswith(instr):
+                            return answer[len(instr):].strip()
+                return answer
+        
         # If no explicit final answer, use last reasoning step
         if reasoning_steps:
             return reasoning_steps[-1].reasoning
+        
         # Fallback: use last substantial paragraph
         paragraphs = [p.strip() for p in llm_response.split('\n\n') if p.strip()]
         return paragraphs[-1] if paragraphs else "Unable to generate final answer."

@@ -81,6 +81,7 @@ def node_1(state: AgentState):
             route = "node_2"
         else:
             semantic_result = "Không tìm thấy thông tin liên quan từ Groq Semantic Search."
+            # When status is UNSUPPORTED, transition to node 4
             route = "node_4"
     except Exception as e:
         print(f"[ERROR] {e}")
@@ -104,14 +105,16 @@ def get_llm_func(engine: str):
         # fallback: echo prompt
         return lambda prompt: prompt
 
-# Node 2 RAG
+# Node 2: RAG
 async def node_2(state: AgentState):
     print("---Node 2: RAG---")
     try:
-        data_dir = os.path.join('Data')
+        from rag.llm import get_llm_func, get_embedding_func
         engine = state.get("engine", "google")
+        embed_engine = state.get("embed_engine", "hugging_face") if "embed_engine" in state else "hugging_face"
+        top_k = state.get("top_k", 5)
         llm_func = get_llm_func(engine)
-        emb_func = hugging_face_embedding
+        emb_func = get_embedding_func(embed_engine)
         
         # Create optimized RAG instance
         rag = create_optimized_rag(
@@ -121,40 +124,24 @@ async def node_2(state: AgentState):
             enable_cache=True
         )
         
+        data_dir = os.path.join('Data')
         load_and_insert_data(rag, data_dir)
+        rag_result = await rag.query(state["query"], QueryParam(top_k=top_k))
         
-        if rag.chunks:
-            param = QueryParam(top_k=5)
-            rag_result = await rag.query(state["query"], param)
-            if (
-                (rag_result is None or rag_result == "" or rag_result == "Không có dữ liệu tham khảo.")
-                and (state.get("semantic_result", "").upper().find("UNSUPPORTED") != -1 or state.get("semantic_result", "").find("không tìm thấy thông tin liên quan".lower()) != -1)
-            ):
-                route = "node_4"
-            # Check if the query contains \think at the beginning or end of the sentence
-            elif state["query"].strip().startswith("\\think") or state["query"].strip().endswith("\\think"):
-                route = "node_3" 
-            else:
-
-                route = "end"  
-                state["final_result"] = rag_result 
+        if "\\think" in state["query"]:
+            route = "node_3"  # Use CoT-RAG for queries with \think
+            final_result = ""  # No final result yet, will be set by node_3
         else:
-            rag_result = "Không có dữ liệu tham khảo."
-            if state.get("semantic_result", "").upper().find("UNSUPPORTED") != -1 or state.get("semantic_result", "").find("không tìm thấy thông tin liên quan".lower()) != -1:
-                route = "node_4"
-            else:
-                # Check if the query contains \think at the beginning or end of the sentence
-                if state["query"].strip().startswith("\\think") or state["query"].strip().endswith("\\think"):
-                    route = "node_3"  # Use CoT-RAG for queries with \think
-                else:
-                    route = "end"  # Skip node_3 for regular queries
-                    state["final_result"] = rag_result  # Set the final result to the RAG result
+            route = "end"  # Skip node_3 for regular queries
+            final_result = rag_result  # Set final result for regular queries
     except Exception as e:
         rag_result = f"Lỗi RAG: {e}"
-        route = "node_4"
+        final_result = rag_result
+        route = "end"  # Even on error, don't transition to node_4
     return {
         **state,
         "rag_result": str(rag_result),
+        "final_result": final_result,
         "route": route
     }
 
@@ -201,11 +188,24 @@ async def node_3(state: AgentState):
             except Exception:
                 # Fallback to string conversion
                 final_result = str(cot_rag_result)
+        if final_result.strip().lower() == "final answer:" or final_result.strip() == "":
+            # Try to extract a meaningful answer from reasoning steps if available
+            if not isinstance(cot_rag_result, str) and hasattr(cot_rag_result, 'reasoning_steps') and cot_rag_result.reasoning_steps:
+                # Use the last reasoning step as the answer
+                final_result = cot_rag_result.reasoning_steps[-1].reasoning
+            elif not isinstance(cot_rag_result, str) and hasattr(cot_rag_result, 'reasoning_chain') and cot_rag_result.reasoning_chain:
+                # Use the reasoning chain as the answer
+                final_result = cot_rag_result.reasoning_chain
+            else:
+                # Provide a fallback message
+                final_result = "Không thể tạo câu trả lời cuối cùng. Vui lòng thử lại với câu hỏi khác."
+        # Node 3 should always transition to end, never to node 4
         route = "end"
     except Exception as e:
         cot_rag_result = f"Lỗi CoT-RAG: {e}"
         final_result = cot_rag_result
-        route = "node_4"
+        # Even on error, don't transition to node_4 from node_3
+        route = "end"
     return {
         **state,
         "cot_rag_result": cot_rag_result,
@@ -223,13 +223,30 @@ def node_4(state: AgentState):
     }
 
 def decision_node(state: AgentState) -> Literal["node_2", "node_4"]:
-    return state.get("route", "node_4")
+    # For node 1, when the status is UNSUPPORTED, transition to node 4
+    route = state.get("route", "node_4")
+    semantic_result = state.get("semantic_result", "")
+    
+    # Transition to node_4 if semantic search result is UNSUPPORTED or if there was an error
+    if route == "node_4" or semantic_result == "UNSUPPORTED" or "Lỗi" in semantic_result:
+        return "node_4"
+    
+    # Otherwise, transition to node_2 (RAG)
+    return "node_2"
 
-def decision_node_2(state: AgentState) -> Literal["node_3", "node_4", "end"]:
-    return state.get("route", "node_4")
+def decision_node_2(state: AgentState) -> Literal["node_3", "end"]:
+    route = state.get("route", "end")
+    query = state.get("query", "")
+    
+    # Check if query contains \think to use CoT-RAG
+    if route == "node_3" or "\\think" in query:
+        return "node_3"
+    
+    return "end"
 
-def decision_node_3(state: AgentState) -> Literal["end", "node_4"]:
-    return state.get("route", "end")
+def decision_node_3(state: AgentState) -> Literal["end"]:
+    # Node 3 should always transition to end, never to node 4
+    return "end"
 
 builder = StateGraph(AgentState)
 builder.add_node("node_1", node_1)
@@ -239,8 +256,8 @@ builder.add_node("node_4", node_4)
 
 builder.add_edge(START, "node_1")
 builder.add_conditional_edges("node_1", decision_node, {"node_2": "node_2", "node_4": "node_4"})
-builder.add_conditional_edges("node_2", decision_node_2, {"node_3": "node_3", "node_4": "node_4", "end": END})
-builder.add_conditional_edges("node_3", decision_node_3, {"end": END, "node_4": "node_4"})
+builder.add_conditional_edges("node_2", decision_node_2, {"node_3": "node_3", "end": END})
+builder.add_conditional_edges("node_3", decision_node_3, {"end": END})
 builder.add_edge("node_4", END)
 
 compiled_graph = builder.compile()
@@ -248,7 +265,7 @@ compiled_graph = builder.compile()
 if __name__ == "__main__":
     import asyncio
     inputs = {
-        "query": "What causes melanoma?",
+        "query": "\think What causes melanoma?",
         "semantic_result": "",
         "rag_result": "",
         "cot_rag_result": "",

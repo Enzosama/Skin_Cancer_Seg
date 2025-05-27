@@ -130,18 +130,6 @@ def chat():
         if not user_message.strip():
             return jsonify({'error': 'Empty message'}), 400
         
-        from graph import node_1, node_2, node_3, node_4, decision_node, decision_node_2, decision_node_3
-        
-        state = {
-            "query": user_message,
-            "semantic_result": "",
-            "rag_result": "",
-            "cot_rag_result": "",
-            "final_result": "",
-            "route": "",
-            "engine": "google"
-        }
-        
         # Gọi pipeline xử lý bất đồng bộ
         if not GRAPH_AVAILABLE or compiled_graph is None:
             print(f"[ERROR] Graph không khả dụng: GRAPH_AVAILABLE={GRAPH_AVAILABLE}, compiled_graph={'Có' if compiled_graph else 'Không'}")
@@ -158,52 +146,63 @@ def chat():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                 
-                # Xử lý theo các node trong graph.py
-                # Node 1: Semantic search
-                state = node_1(state)
+                # Sử dụng compiled_graph để xử lý truy vấn
+                state = {
+                    "query": user_message,
+                    "semantic_result": "",
+                    "rag_result": "",
+                    "cot_rag_result": "",
+                    "final_result": "",
+                    "route": "",
+                    "engine": "google"
+                }
                 
-                # Quyết định route tiếp theo
-                next_node = decision_node(state)
-                
-                if next_node == "node_2":
-                    # Node 2: RAG
-                    state = loop.run_until_complete(asyncio.wait_for(
-                        node_2(state),
-                        timeout=45.0  # 45 giây timeout
-                    ))
-                    
-                    # Quyết định route tiếp theo
-                    next_node = decision_node_2(state)
-                    
-                    if next_node == "node_3":
-                        # Node 3: CoT-RAG
-                        state = loop.run_until_complete(asyncio.wait_for(
-                            node_3(state),
-                            timeout=45.0  # 45 giây timeout
-                        ))
-                        
-                        # Quyết định route cuối cùng
-                        next_node = decision_node_3(state)
-                        
-                        if next_node != "end":
-                            # Node 4: Không hỗ trợ
-                            state = node_4(state)
-                    else:
-                        # Node 4: Không hỗ trợ
-                        state = node_4(state)
-                else:
-                    # Node 4: Không hỗ trợ
-                    state = node_4(state)
+                # Gọi compiled_graph để xử lý truy vấn
+                result = loop.run_until_complete(asyncio.wait_for(
+                    compiled_graph.ainvoke(state),
+                    timeout=90.0  # 90 giây timeout
+                ))
                 
                 # Đóng loop nếu chúng ta đã tạo mới
                 if loop != asyncio.get_event_loop():
                     loop.close()
-                    
-                response_text = state.get("final_result", "Không có kết quả.")
+                
+                # Lấy kết quả từ graph.py
+                response_text = result.get("final_result", "Không có kết quả.")
                 
                 # Đảm bảo response_text là string
                 if not isinstance(response_text, str):
                     response_text = str(response_text)
+                
+                # Kiểm tra nếu response_text chứa template instructions
+                template_instructions = [
+                    "Provide a comprehensive definition.", 
+                    "Provide a clear process explanation.", 
+                    "Explain the causal relationship.", 
+                    "Provide treatment recommendations.", 
+                    "Describe the symptoms and their significance.", 
+                    "Provide diagnostic guidance.", 
+                    "Provide a comprehensive response."
+                ]
+                
+                # Loại bỏ template instructions nếu có
+                for instr in template_instructions:
+                    if response_text.startswith(instr):
+                        response_text = response_text[len(instr):].strip()
+                        break
+                    
+                # Kiểm tra và loại bỏ các template instructions khác có thể xuất hiện trong văn bản
+                if any(instr in response_text for instr in template_instructions):
+                    for instr in template_instructions:
+                        if instr in response_text:
+                            response_text = response_text.replace(instr, "").strip()                
+                if response_text.strip().lower() == "final answer:" or response_text.strip() == "":
+                    if result.get("cot_rag_result") and isinstance(result.get("cot_rag_result"), str) and result.get("cot_rag_result").strip() != "":
+                        response_text = result.get("cot_rag_result")
+                    elif result.get("rag_result") and isinstance(result.get("rag_result"), str) and result.get("rag_result").strip() != "":
+                        response_text = result.get("rag_result")
+                    else:
+                        response_text = "Không thể tạo câu trả lời. Vui lòng thử lại với câu hỏi khác."
                     
             except asyncio.TimeoutError:
                 print(f"[ERROR] Timeout khi xử lý câu hỏi: {user_message}")
@@ -218,6 +217,8 @@ def chat():
         return jsonify({'response': response_text})
         
     except Exception as e:
+        if 'response_text' in locals() and response_text:
+            return jsonify({'response': response_text})
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 @app.route('/health', methods=['GET'])
