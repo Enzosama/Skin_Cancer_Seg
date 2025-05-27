@@ -128,49 +128,49 @@ class OptimizedCoTRAG(OptimizedRAG):
                 "Context Analysis: What relevant information is available?",
                 "Definition Formation: How can I provide a clear, accurate definition?",
                 "Medical Context: What medical context should be included?",
-                "Final Answer: Provide a comprehensive definition."
+                "Final Answer: Based on the medical context and available information, provide the specific definition requested."
             ],
             'process': [
                 "Understanding: What process or mechanism is being asked about?",
                 "Step Identification: What are the key steps or stages?",
                 "Context Review: What supporting information is available?",
                 "Process Explanation: How does this process work?",
-                "Final Answer: Provide a clear process explanation."
+                "Final Answer: Explain the specific process or mechanism step by step."
             ],
             'causation': [
                 "Understanding: What causal relationship is being explored?",
                 "Factor Analysis: What are the potential causes or factors?",
                 "Evidence Review: What evidence supports these causes?",
                 "Mechanism Explanation: How do these causes lead to the effect?",
-                "Final Answer: Explain the causal relationship."
+                "Final Answer: Clearly explain the causal relationship and underlying mechanisms."
             ],
             'treatment': [
                 "Understanding: What treatment information is being requested?",
                 "Treatment Options: What treatments are available?",
                 "Effectiveness Analysis: How effective are these treatments?",
                 "Considerations: What factors should be considered?",
-                "Final Answer: Provide treatment recommendations."
+                "Final Answer: Present the specific treatment options and recommendations."
             ],
             'symptoms': [
                 "Understanding: What symptoms or signs are being asked about?",
                 "Symptom Identification: What are the key symptoms?",
                 "Clinical Significance: What do these symptoms indicate?",
                 "Differential Considerations: How do these relate to diagnosis?",
-                "Final Answer: Describe the symptoms and their significance."
+                "Final Answer: List and explain the specific symptoms and their clinical significance."
             ],
             'diagnosis': [
                 "Understanding: What diagnostic information is being requested?",
                 "Diagnostic Criteria: What are the key diagnostic features?",
                 "Assessment Methods: How is this condition diagnosed?",
                 "Differential Diagnosis: What other conditions should be considered?",
-                "Final Answer: Provide diagnostic guidance."
+                "Final Answer: Present the diagnostic criteria and assessment methods."
             ],
             'general': [
                 "Understanding: What is the core question being asked?",
                 "Context Analysis: What relevant information is available?",
                 "Knowledge Application: How can medical knowledge be applied?",
                 "Synthesis: How can information be combined for an answer?",
-                "Final Answer: Provide a comprehensive response."
+                "Final Answer: Based on the analysis above, provide a specific answer to the question."
             ]
         }
         
@@ -412,54 +412,114 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
             )
     
     def _extract_final_answer(self, llm_response: str, reasoning_steps: List[CoTStep]) -> str:
-        """Extract final answer from LLM response, without label"""
-        lines = llm_response.split('\n')
+        """Extract final answer from LLM response with improved handling"""
+        if not llm_response:
+            return "No response generated"
+        
+        # Template instructions to remove (more comprehensive list)
         template_instructions = [
-            "Provide a comprehensive definition.", 
+            "Provide a comprehensive definition.",
             "Provide a clear process explanation.", 
-            "Explain the causal relationship.", 
-            "Provide treatment recommendations.", 
-            "Describe the symptoms and their significance.", 
-            "Provide diagnostic guidance.", 
-            "Provide a comprehensive response."
+            "Explain the causal relationship.",
+            "Provide treatment recommendations.",
+            "Describe the symptoms and their significance.",
+            "Provide diagnostic guidance.",
+            "Provide a comprehensive response.",
+            "Based on the medical context and available information, provide the specific definition requested.",
+            "Explain the specific process or mechanism step by step.",
+            "Clearly explain the causal relationship and underlying mechanisms.",
+            "Present the specific treatment options and recommendations.",
+            "List and explain the specific symptoms and their clinical significance.",
+            "Present the diagnostic criteria and assessment methods.",
+            "Based on the analysis above, provide a specific answer to the question.",
+            "Let's think step by step:",
+            "Step 1:", "Step 2:", "Step 3:", "Step 4:", "Step 5:"
         ]
+        
+        lines = llm_response.split('\n')
         
         for line in lines:
             if 'final answer' in line.lower() and ':' in line:
                 # Remove label and return only the answer content
                 answer = line.split(':', 1)[1].strip()
-                # Check if the answer is empty or just contains whitespace
-                if not answer.strip():
-                    # If we find "Final Answer:" with nothing after it, look for content in the next lines
+                
+                # Remove template instructions
+                for instruction in template_instructions:
+                    if instruction.lower() in answer.lower():
+                        answer = answer.replace(instruction, "").strip()
+                
+                # If answer is empty or just template text, look for content in subsequent lines
+                if not answer or answer.lower() in ["final answer:", "answer:"] or len(answer) < 10:
                     next_line_index = lines.index(line) + 1
-                    if next_line_index < len(lines):
-                        # Get the next non-empty line
-                        for next_line in lines[next_line_index:]:
-                            if next_line.strip():
-                                answer = next_line.strip()
-                                break
-                    # If still empty, continue looking for another "Final Answer:" line
-                    if not answer.strip():
-                        continue
+                    extracted_lines = []
+                    
+                    for next_line in lines[next_line_index:]:
+                        clean_line = next_line.strip()
+                        if clean_line:
+                            # Skip template instructions and step markers
+                            if (not any(instr.lower() in clean_line.lower() for instr in template_instructions) and 
+                                not clean_line.lower().startswith(('step ', 'understanding:', 'context analysis:', 'definition formation:', 
+                                                                   'medical context:', 'process explanation:', 'factor analysis:', 
+                                                                   'evidence review:', 'mechanism explanation:'))):
+                                extracted_lines.append(clean_line)
+                    
+                    if extracted_lines:
+                        answer = ' '.join(extracted_lines)
+                
                 # Check if the answer is just a template instruction and not actual content
                 if answer in template_instructions:
-                    # Skip template answers and continue looking
                     continue
+                
                 # Check if the answer starts with any template instruction
                 if any(answer.startswith(instr) for instr in template_instructions):
-                    # Skip the template part and return the rest
                     for instr in template_instructions:
                         if answer.startswith(instr):
-                            return answer[len(instr):].strip()
-                return answer
+                            answer = answer[len(instr):].strip()
+                            break
+                
+                if answer and len(answer.strip()) > 10:
+                    return answer.strip()
+        
+        # Fallback: look for substantial content after reasoning steps
+        content_lines = []
+        
+        for line in lines:
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+                
+            # Skip template instructions and step markers
+            if (any(instr.lower() in clean_line.lower() for instr in template_instructions) or
+                clean_line.lower().startswith(('step ', 'understanding:', 'context analysis:', 'definition formation:', 
+                                               'medical context:', 'process explanation:', 'factor analysis:', 
+                                               'evidence review:', 'mechanism explanation:', 'let\'s think'))):
+                continue
+                
+            # Look for substantial medical content
+            if len(clean_line) > 20 and any(word in clean_line.lower() for word in 
+                                           ['cancer', 'skin', 'melanoma', 'treatment', 'diagnosis', 'symptom', 'medical', 'patient', 'disease', 'condition']):
+                content_lines.append(clean_line)
+        
+        if content_lines:
+            return ' '.join(content_lines[:3])  # Take first 3 substantial lines
         
         # If no explicit final answer, use last reasoning step
         if reasoning_steps:
             return reasoning_steps[-1].reasoning
         
-        # Fallback: use last substantial paragraph
-        paragraphs = [p.strip() for p in llm_response.split('\n\n') if p.strip()]
-        return paragraphs[-1] if paragraphs else "Unable to generate final answer."
+        # Last resort: return last substantial paragraph
+        paragraphs = [p.strip() for p in llm_response.split('\n\n') if p.strip() and len(p.strip()) > 20]
+        if paragraphs:
+            last_paragraph = paragraphs[-1]
+            # Remove template instructions from last paragraph
+            for instruction in template_instructions:
+                if instruction.lower() in last_paragraph.lower():
+                    last_paragraph = last_paragraph.replace(instruction, "").strip()
+            
+            if last_paragraph and len(last_paragraph) > 20:
+                return last_paragraph
+        
+        return "Unable to generate final answer."
 
     def _extract_patient_friendly_answer(self, llm_response: str) -> str:
         """Extract patient-friendly answer from LLM response"""

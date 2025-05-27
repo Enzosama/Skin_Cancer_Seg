@@ -188,16 +188,38 @@ async def node_3(state: AgentState):
             except Exception:
                 # Fallback to string conversion
                 final_result = str(cot_rag_result)
-        if final_result.strip().lower() == "final answer:" or final_result.strip() == "":
+        # Enhanced validation for template responses and empty answers
+        template_responses = [
+            "final answer:", "provide a comprehensive response", "provide a comprehensive definition",
+            "explain the causal relationship", "provide treatment recommendations",
+            "describe the symptoms and their significance", "provide diagnostic guidance",
+            "based on the medical context and available information", "let's think step by step"
+        ]
+        
+        is_template_response = (
+            final_result.strip() == "" or 
+            final_result.strip().lower() in template_responses or
+            any(template in final_result.lower() for template in template_responses) and len(final_result.strip()) < 50
+        )
+        
+        if is_template_response:
             # Try to extract a meaningful answer from reasoning steps if available
             if not isinstance(cot_rag_result, str) and hasattr(cot_rag_result, 'reasoning_steps') and cot_rag_result.reasoning_steps:
-                # Use the last reasoning step as the answer
-                final_result = cot_rag_result.reasoning_steps[-1].reasoning
+                # Look for substantial reasoning content
+                for step in reversed(cot_rag_result.reasoning_steps):
+                    if hasattr(step, 'reasoning') and len(step.reasoning.strip()) > 20:
+                        # Check if this reasoning contains actual medical content
+                        medical_keywords = ['cancer', 'skin', 'melanoma', 'treatment', 'diagnosis', 'symptom', 'medical', 'patient']
+                        if any(keyword in step.reasoning.lower() for keyword in medical_keywords):
+                            final_result = step.reasoning
+                            break
             elif not isinstance(cot_rag_result, str) and hasattr(cot_rag_result, 'reasoning_chain') and cot_rag_result.reasoning_chain:
-                # Use the reasoning chain as the answer
-                final_result = cot_rag_result.reasoning_chain
-            else:
-                # Provide a fallback message
+                # Use the reasoning chain if it contains substantial content
+                if len(cot_rag_result.reasoning_chain.strip()) > 20:
+                    final_result = cot_rag_result.reasoning_chain
+            
+            # If still no good answer, provide a fallback message
+            if is_template_response or len(final_result.strip()) < 20:
                 final_result = "Không thể tạo câu trả lời cuối cùng. Vui lòng thử lại với câu hỏi khác."
         # Node 3 should always transition to end, never to node 4
         route = "end"

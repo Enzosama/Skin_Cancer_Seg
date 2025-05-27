@@ -182,7 +182,16 @@ def chat():
                     "Provide treatment recommendations.", 
                     "Describe the symptoms and their significance.", 
                     "Provide diagnostic guidance.", 
-                    "Provide a comprehensive response."
+                    "Provide a comprehensive response.",
+                    "Based on the medical context and available information, provide the specific definition requested.",
+                    "Explain the specific process or mechanism step by step.",
+                    "Clearly explain the causal relationship and underlying mechanisms.",
+                    "Present the specific treatment options and recommendations.",
+                    "List and explain the specific symptoms and their clinical significance.",
+                    "Present the diagnostic criteria and assessment methods.",
+                    "Based on the analysis above, provide a specific answer to the question.",
+                    "Let's think step by step:",
+                    "Step 1:", "Step 2:", "Step 3:", "Step 4:", "Step 5:"
                 ]
                 
                 # Loại bỏ template instructions nếu có

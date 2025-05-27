@@ -52,7 +52,7 @@ class RAGBenchmark:
         ]
         
         # Initialize LLM function
-        self.llm_func = get_llm_func()
+        self.llm_func = get_llm_func("hugging_face")
         self.embedding_func = hugging_face_embedding
     
     def measure_memory_usage(self) -> float:
