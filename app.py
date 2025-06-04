@@ -9,14 +9,46 @@ import numpy as np
 import asyncio
 from flask import Flask, request, jsonify, render_template
 import tensorflow as tf
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.applications.imagenet_utils import preprocess_input
+from optimized_rag import faiss_index
 
-# Thử import graph module, nếu không có thì đặt GRAPH_AVAILABLE = False
 try:
     from graph import compiled_graph
     GRAPH_AVAILABLE = True
 except ImportError:
     GRAPH_AVAILABLE = False
     compiled_graph = None
+
+# Function to preload FAISS index
+def faiss_index():
+    try:
+        from optimized_rag import create_optimized_rag
+        from rag.llm import hugging_face_embedding
+        
+        # Create a new event loop if needed
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # Initialize RAG with FAISS index
+        rag = create_optimized_rag(
+            working_dir="./rag_cache",
+            llm_model_func=None,
+            embedding_func=hugging_face_embedding,
+            enable_cache=True,
+            use_sqlite=True
+        )
+        print("[INFO] FAISS index preloaded successfully")
+        return rag
+    except Exception as e:
+        print(f"[ERROR] Failed to preload FAISS index: {e}")
+        return None
 
 # Create Flask app
 app = Flask(__name__)
@@ -31,62 +63,131 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
-def get_predictions(image_path):    
-    classes = {
-        4: ('nv', 'melanocytic nevi'), 
-        6: ('mel', 'melanoma'), 
-        2: ('bkl', 'benign keratosis-like lesions'), 
-        1: ('bcc', 'basal cell carcinoma'), 
-        5: ('vasc', 'pyogenic granulomas and hemorrhage'), 
-        0: ('akiec', 'Actinic keratoses and intraepithelial carcinomae'), 
-        3: ('df', 'dermatofibroma')
-    }
-    model_path = r'static/best_model.keras'
-    
-    # Check if model exists
-    if not os.path.exists(model_path):
-        return [{"label": f"Error: Model not found at {model_path}", "confidence": 0.0}]
-    
-    try:
-        model = tf.keras.models.load_model(model_path)
-    except Exception as e:
-        return [{"label": f"Error loading model: {str(e)}", "confidence": 0.0}]
-    
-    # Read and preprocess the image
-    img = cv2.imread(image_path)
-    if img is None:
-        return [{"label": "Error: Could not read image", "confidence": 0.0}]
-    
-    # Resize for model input
-    img = cv2.resize(img, (28, 28))
-    img = img / 255.0
-    try:
-        result = model.predict(np.expand_dims(img, axis=0))
-    except Exception as e:
-        return [{"label": f"Error during prediction: {str(e)}", "confidence": 0.0}]
-    
-    # Process the prediction results
-    predictions = []
-    # If the model output is already normalized (sums to 1), skip this step
-    if np.sum(result[0]) > 1.1:  # Check if values need normalization
-        from tensorflow.keras.activations import softmax
-        result = softmax(result).numpy()
-    # Sort results by confidence (descending)
-    sorted_indices = np.argsort(result[0])[::-1]
-    for i in range(min(5, len(sorted_indices))):
-        class_ind = int(sorted_indices[i])
-        # Ensure class_ind is a valid key in the classes dictionary
-        if class_ind not in classes:
-            continue
+def get_predictions(image_path):
+    # Load model if not already loaded
+    model_path = 'static/complete_model.h5'
+    if not hasattr(get_predictions, 'model'):
+        try:
+            print("[INFO] Attempting to load model...")
             
-        confidence = float(result[0][class_ind])
-        class_code, class_name = classes[class_ind]
-        confidence_pct = min(confidence, 100.0)
-        predictions.append({
-            "label": f"{class_name} ({class_code})",
-            "confidence": confidence_pct
-        })
-    return predictions
+            # Method 1: Custom InputLayer class to handle batch_shape
+            class CompatibleInputLayer(tf.keras.layers.InputLayer):
+                def __init__(self, **kwargs):
+                    # Convert batch_shape to input_shape for compatibility
+                    if 'batch_shape' in kwargs:
+                        batch_shape = kwargs.pop('batch_shape')
+                        if batch_shape and len(batch_shape) > 1:
+                            kwargs['input_shape'] = batch_shape[1:]
+                    super().__init__(**kwargs)
+            
+            custom_objects = {
+                'InputLayer': CompatibleInputLayer,
+            }
+            
+            try:
+                get_predictions.model = tf.keras.models.load_model(
+                    model_path, 
+                    compile=False,
+                    custom_objects=custom_objects
+                )
+                print("[INFO] Model loaded successfully with compatible InputLayer")
+            except Exception as e1:
+                print(f"[WARNING] Compatible InputLayer method failed: {e1}")
+                
+                # Method 2: Try with TensorFlow compatibility mode
+                try:
+                    import tensorflow.compat.v1 as tf_v1
+                    tf_v1.disable_v2_behavior()
+                    get_predictions.model = tf.keras.models.load_model(
+                        model_path, 
+                        compile=False
+                    )
+                    print("[INFO] Model loaded with TF v1 compatibility mode")
+                except Exception as e2:
+                    print(f"[WARNING] TF v1 compatibility failed: {e2}")
+                    
+                    # Method 3: Try loading with older Keras format
+                    try:
+                        # Force use of legacy format
+                        get_predictions.model = tf.keras.models.load_model(
+                            model_path, 
+                            compile=False,
+                            options=tf.saved_model.LoadOptions(experimental_io_device='/job:localhost')
+                        )
+                        print("[INFO] Model loaded with legacy format options")
+                    except Exception as e3:
+                        print(f"[WARNING] Legacy format failed: {e3}")
+                        
+                        # Method 4: Manual model reconstruction
+                        get_predictions.model = reconstruct_model_from_weights(model_path)
+                        if get_predictions.model is None:
+                            raise Exception(f"All loading methods failed. You need to re-export your model with current TensorFlow version.")
+                        else:
+                            print("[INFO] Model reconstructed from weights")
+                    
+        except Exception as e:
+            print(f"[ERROR] Failed to load model: {e}")
+            return [{
+                'label': 'Model Load Error',
+                'confidence': 0.0,
+                'error': f'Model loading failed: {str(e)}. Please re-export your model with TensorFlow {tf.__version__}'
+            }]
+    
+    # Define class indices and descriptions
+    class_indices = {
+        'akiec': 0, 'bcc': 1, 'bkl': 2, 'df': 3, 'mel': 4, 'nv': 5, 'vasc': 6
+    }
+    class_descriptions = {
+        'akiec': 'Actinic Keratoses',
+        'bcc': 'Basal Cell Carcinoma', 
+        'bkl': 'Benign Keratosis',
+        'df': 'Dermatofibroma',
+        'mel': 'Melanoma',
+        'nv': 'Melanocytic Nevi',
+        'vasc': 'Vascular Lesions'
+    }
+    
+    try:
+        # Validate image path
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+        # Load and preprocess the image
+        img = image.load_img(image_path, target_size=(224, 224))
+        img_array = image.img_to_array(img)
+        img_array = img_array / 255.0
+        img_array = np.expand_dims(img_array, axis=0)
+        predictions = get_predictions.model.predict(img_array, verbose=0)
+        if np.max(predictions[0]) > 1.0:
+            predictions = tf.nn.softmax(predictions).numpy()
+            print("[INFO] Applied softmax to predictions")
+        
+        # Process results
+        results = []
+        for i, pred in enumerate(predictions[0]):
+            confidence = float(pred) 
+            class_name = list(class_indices.keys())[i]
+            results.append({
+                'label': class_descriptions.get(class_name, class_name),
+                'class_name': class_name,
+                'confidence': round(confidence, 2)
+            })
+        
+        # Sort by confidence (descending)
+        results.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        print(f"[INFO] Top prediction: {results[0]['label']} ({results[0]['confidence']:.2f}%)")
+        return results[:5]
+    
+    except Exception as e:
+        print(f"[ERROR] Prediction failed: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return [{
+            'label': 'Prediction Error',
+            'confidence': 0.0,
+            'error': f'Prediction failed: {str(e)}'
+        }]
 
 @app.route('/')
 def index():
@@ -94,28 +195,89 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
-    
-    file = request.files['file']
-    
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-    
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
-        # Get predictions from AI model
-        predictions = get_predictions(file_path)
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
         
-        return jsonify({
-            'success': True,
-            'image_url': f'/static/uploads/{filename}',
-            'predictions': predictions
-        })
-    
-    return jsonify({'error': 'File type not allowed'}), 400
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
+        
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            # Ensure upload directory exists
+            upload_dir = app.config['UPLOAD_FOLDER']
+            os.makedirs(upload_dir, exist_ok=True)
+            file_path = os.path.join(upload_dir, filename)
+            file.save(file_path)
+            predictions = get_predictions(file_path)
+            return jsonify({
+                'success': True,
+                'image_url': f'/static/uploads/{filename}',
+                'predictions': predictions
+            })
+        else:
+            return jsonify({'error': 'File type not allowed'}), 400            
+    except Exception as e:
+        print(f"[ERROR] Upload handling failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Upload processing failed: {str(e)}'}), 500
+
+# Model reconstruction function for incompatible models
+def reconstruct_model_from_weights(model_path):
+    try:
+        # Try to extract weights from the H5 file
+        import h5py
+
+        model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(224, 224, 3)),
+            tf.keras.layers.Conv2D(32, (3, 3), activation='relu'),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Conv2D(128, (3, 3), activation='relu'),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(512, activation='relu'),
+            tf.keras.layers.Dropout(0.5),
+            tf.keras.layers.Dense(7, activation='softmax')  # 7 classes for skin lesions
+        ])
+        
+        # Try to load weights (this might fail if architecture doesn't match)
+        try:
+            model.load_weights(model_path)
+            print("[INFO] Weights loaded into reconstructed model")
+            return model
+        except:
+            print("[WARNING] Could not load weights into simple architecture")
+            
+            # Try with a more complex architecture (EfficientNet-like)
+            try:
+                base_model = tf.keras.applications.EfficientNetB0(
+                    weights=None,  # Don't load ImageNet weights
+                    include_top=False,
+                    input_shape=(224, 224, 3)
+                )
+                
+                x = base_model.output
+                x = tf.keras.layers.GlobalAveragePooling2D()(x)
+                x = tf.keras.layers.Dropout(0.2)(x)
+                predictions = tf.keras.layers.Dense(7, activation='softmax')(x)
+                
+                model = tf.keras.Model(inputs=base_model.input, outputs=predictions)
+                model.load_weights(model_path)
+                print("[INFO] Weights loaded into EfficientNet architecture")
+                return model
+            except Exception as e:
+                print(f"[WARNING] EfficientNet reconstruction failed: {e}")
+                return None
+                
+    except Exception as e:
+        print(f"[ERROR] Model reconstruction failed: {e}")
+        return None
+
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -136,12 +298,8 @@ def chat():
             response_text = "Xin lỗi, hệ thống RAG hiện tại không khả dụng. Vui lòng thử lại sau hoặc liên hệ quản trị viên."
         else:
             try:
-                # Tạo event loop mới nếu không có sẵn
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_closed():
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
+                    loop = asyncio.get_running_loop()
                 except RuntimeError:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
@@ -160,11 +318,11 @@ def chat():
                 # Gọi compiled_graph để xử lý truy vấn
                 result = loop.run_until_complete(asyncio.wait_for(
                     compiled_graph.ainvoke(state),
-                    timeout=90.0  # 90 giây timeout
+                    timeout=600.0  # 600 giây timeout
                 ))
                 
                 # Đóng loop nếu chúng ta đã tạo mới
-                if loop != asyncio.get_event_loop():
+                if not loop.is_running():
                     loop.close()
                 
                 # Lấy kết quả từ graph.py
@@ -173,8 +331,7 @@ def chat():
                 # Đảm bảo response_text là string
                 if not isinstance(response_text, str):
                     response_text = str(response_text)
-                
-                # Kiểm tra nếu response_text chứa template instructions
+            
                 template_instructions = [
                     "Provide a comprehensive definition.", 
                     "Provide a clear process explanation.", 
@@ -246,7 +403,6 @@ def health_check():
             }
         }
     }
-    
     # Kiểm tra xem tất cả các thành phần có hoạt động không
     all_components_ok = all([
         health_status['components']['graph']['available'],
@@ -260,6 +416,8 @@ def health_check():
     return jsonify(health_status)
 
 if __name__ == '__main__':
+    # Preload FAISS index at startup
+    _preloaded_rag = faiss_index()
     # Kiểm tra trạng thái của graph khi khởi động
     if not GRAPH_AVAILABLE or compiled_graph is None:
         print("[WARNING] Graph không khả dụng hoặc chưa được biên dịch. Chức năng chat sẽ bị vô hiệu hóa.")
@@ -267,5 +425,4 @@ if __name__ == '__main__':
         print(f"compiled_graph = {'Có' if compiled_graph else 'Không'}")
     else:
         print("[INFO] Graph đã sẵn sàng. Chức năng chat đã được kích hoạt.")
-    
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    app.run(host="0.0.0.0", port=7860, debug=True)

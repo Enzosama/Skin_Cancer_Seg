@@ -8,9 +8,11 @@ from cothought_rag import CoTRAG, load_and_insert_data_cotrag, cotrag_query
 from native_rag import load_and_insert_data
 from optimized_rag import OptimizedRAG, create_optimized_rag
 from optimized_cot_rag import OptimizedCoTRAG, create_optimized_cot_rag
+from cot_rag.rag import CoTResult
 from dotenv import load_dotenv 
 load_dotenv()
 from groq import Groq
+import asyncio
 
 def get_api_key(service: str):
     env_map = {
@@ -106,134 +108,76 @@ def get_llm_func(engine: str):
         return lambda prompt: prompt
 
 # Node 2: RAG
-async def node_2(state: AgentState):
-    print("---Node 2: RAG---")
+def node_2(state: AgentState):
+    """RAG"""
     try:
-        from rag.llm import get_llm_func, get_embedding_func
-        engine = state.get("engine", "google")
-        embed_engine = state.get("embed_engine", "hugging_face") if "embed_engine" in state else "hugging_face"
-        top_k = state.get("top_k", 5)
-        llm_func = get_llm_func(engine)
-        emb_func = get_embedding_func(embed_engine)
-        
-        # Create optimized RAG instance
         rag = create_optimized_rag(
-            working_dir='.',
-            llm_model_func=llm_func,
-            embedding_func=emb_func,
-            enable_cache=True
+            working_dir="./rag_cache",
+            llm_model_func=None,
+            embedding_func=hugging_face_embedding,
+            enable_cache=True,
+            use_sqlite=True
         )
-        
-        data_dir = os.path.join('Data')
-        load_and_insert_data(rag, data_dir)
-        rag_result = await rag.query(state["query"], QueryParam(top_k=top_k))
-        
-        if "\\think" in state["query"]:
-            route = "node_3"  # Use CoT-RAG for queries with \think
-            final_result = ""  # No final result yet, will be set by node_3
+        load_and_insert_data(rag, "./Data")
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        result = loop.run_until_complete(rag.query(state["query"]))
+        state["rag_result"] = result
+        if "\think" in state["query"]:
+            state["final_result"] = result
         else:
-            route = "end"  # Skip node_3 for regular queries
-            final_result = rag_result  # Set final result for regular queries
+            state["final_result"] = result
+        return state
     except Exception as e:
-        rag_result = f"Lỗi RAG: {e}"
-        final_result = rag_result
-        route = "end"  # Even on error, don't transition to node_4
-    return {
-        **state,
-        "rag_result": str(rag_result),
-        "final_result": final_result,
-        "route": route
-    }
+        print(f"Error in node_2: {e}")
+        state["final_result"] = "Không hỗ trợ"
+        return state
 
 # Node 3: Sử dụng CoT-RAG
-async def node_3(state: AgentState):
-    print("---Node 3: CoT-RAG---")
+def node_3(state: AgentState):
+    """CoT-RAG"""
     try:
-        from rag.llm import get_llm_func, get_embedding_func
-        engine = state.get("engine", "google")
-        embed_engine = state.get("embed_engine", "hugging_face") if "embed_engine" in state else "hugging_face"
-        top_k = state.get("top_k", 5)
-        llm_func = get_llm_func(engine)
-        emb_func = get_embedding_func(embed_engine)
-        
-        # Create optimized CoT-RAG instance
-        cotrag = create_optimized_cot_rag(
-            working_dir='.',
-            llm_model_func=llm_func,
-            embedding_func=emb_func,
-            max_reasoning_steps=5,
-            confidence_threshold=0.7,
-            enable_cache=True
+        cot_rag = create_optimized_cot_rag(
+            working_dir="./cot_rag_cache",
+            llm_model_func=None,
+            embedding_func=hugging_face_embedding,
+            enable_cache=True,
+            use_sqlite=True
         )
-        
-        data_dir = os.path.join('Data')
-        load_and_insert_data_cotrag(cotrag, data_dir)
-        cot_rag_result = await cotrag_query(state["query"], cotrag, top_k=top_k, detailed=False)
-        
-        # Handle both old string format and new CoTResult format for backward compatibility
-        if isinstance(cot_rag_result, str):
-            final_result = cot_rag_result
-        else:
-            # If it's a CoTResult object, extract the final answer
-            try:
-                from cot_rag import CoTResult
-                if hasattr(cot_rag_result, 'final_answer'):
-                    final_result = cot_rag_result.final_answer
-                    if hasattr(cot_rag_result, 'confidence_score') and hasattr(cot_rag_result, 'total_steps'):
-                        print(f"[NODE_3] Confidence: {cot_rag_result.confidence_score:.2f}, Steps: {cot_rag_result.total_steps}")
-                elif hasattr(cot_rag_result, 'answer'):
-                    final_result = cot_rag_result.answer
-                else:
-                    final_result = str(cot_rag_result)
-            except Exception:
-                # Fallback to string conversion
-                final_result = str(cot_rag_result)
-        # Enhanced validation for template responses and empty answers
-        template_responses = [
-            "final answer:", "provide a comprehensive response", "provide a comprehensive definition",
-            "explain the causal relationship", "provide treatment recommendations",
-            "describe the symptoms and their significance", "provide diagnostic guidance",
-            "based on the medical context and available information", "let's think step by step"
-        ]
-        
-        is_template_response = (
-            final_result.strip() == "" or 
-            final_result.strip().lower() in template_responses or
-            any(template in final_result.lower() for template in template_responses) and len(final_result.strip()) < 50
-        )
-        
-        if is_template_response:
-            # Try to extract a meaningful answer from reasoning steps if available
-            if not isinstance(cot_rag_result, str) and hasattr(cot_rag_result, 'reasoning_steps') and cot_rag_result.reasoning_steps:
-                # Look for substantial reasoning content
-                for step in reversed(cot_rag_result.reasoning_steps):
-                    if hasattr(step, 'reasoning') and len(step.reasoning.strip()) > 20:
-                        # Check if this reasoning contains actual medical content
-                        medical_keywords = ['cancer', 'skin', 'melanoma', 'treatment', 'diagnosis', 'symptom', 'medical', 'patient']
-                        if any(keyword in step.reasoning.lower() for keyword in medical_keywords):
-                            final_result = step.reasoning
-                            break
-            elif not isinstance(cot_rag_result, str) and hasattr(cot_rag_result, 'reasoning_chain') and cot_rag_result.reasoning_chain:
-                # Use the reasoning chain if it contains substantial content
-                if len(cot_rag_result.reasoning_chain.strip()) > 20:
-                    final_result = cot_rag_result.reasoning_chain
+        load_and_insert_data_cotrag(cot_rag, "./Data")
+        # Run the async query in a synchronous context
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
-            # If still no good answer, provide a fallback message
-            if is_template_response or len(final_result.strip()) < 20:
-                final_result = "Không thể tạo câu trả lời cuối cùng. Vui lòng thử lại với câu hỏi khác."
-        # Node 3 should always transition to end, never to node 4
-        route = "end"
+        result = loop.run_until_complete(cot_rag.query(state["query"]))
+        if isinstance(result, str):
+            state["final_result"] = result
+            state["cot_rag_result"] = result
+        elif isinstance(result, CoTResult):
+            state["final_result"] = result.final_answer
+            state["cot_rag_result"] = result.final_answer
+        else:
+            state["final_result"] = str(result)
+            state["cot_rag_result"] = str(result)
+        return state
     except Exception as e:
-        cot_rag_result = f"Lỗi CoT-RAG: {e}"
-        final_result = cot_rag_result
-        # Even on error, don't transition to node_4 from node_3
-        route = "end"
-    return {
-        **state,
-        "cot_rag_result": cot_rag_result,
-        "final_result": final_result,
-        "route": route
-    }
+        print(f"Error in node_3: {e}")
+        state["final_result"] = "Không hỗ trợ"
+        state["cot_rag_result"] = "Không hỗ trợ"
+        return state
 
 # Node 4: Trả về "Không hỗ trợ"
 def node_4(state: AgentState):
@@ -252,7 +196,6 @@ def decision_node(state: AgentState) -> Literal["node_2", "node_4"]:
     # Transition to node_4 if semantic search result is UNSUPPORTED or if there was an error
     if route == "node_4" or semantic_result == "UNSUPPORTED" or "Lỗi" in semantic_result:
         return "node_4"
-    
     # Otherwise, transition to node_2 (RAG)
     return "node_2"
 
@@ -285,7 +228,6 @@ builder.add_edge("node_4", END)
 compiled_graph = builder.compile()
 
 if __name__ == "__main__":
-    import asyncio
     inputs = {
         "query": "\think What causes melanoma?",
         "semantic_result": "",
@@ -294,12 +236,10 @@ if __name__ == "__main__":
         "final_result": "",
         "route": "",
     }
-    async def main():
-        result = await compiled_graph.ainvoke(inputs)
-        print("Kết quả cuối cùng:", result)
-    asyncio.run(main())
+    # Use invoke instead of ainvoke since we've made the nodes synchronous
+    result = compiled_graph.invoke(inputs)
+    print("Kết quả cuối cùng:", result)
 
 class CustomRAG(RAG):
     def __init__(self, working_dir, llm_model_func, embedding_func):
         super().__init__(working_dir=working_dir, llm_model_func=llm_model_func, embedding_func=embedding_func)
-

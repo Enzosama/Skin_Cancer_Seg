@@ -5,6 +5,7 @@ import os
 import hashlib
 import time
 import logging
+import sqlite3
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -45,32 +46,98 @@ class OptimizedCoTRAG(OptimizedRAG):
         self.confidence_threshold = confidence_threshold
         self.logger = logging.getLogger(__name__)
         
-        # CoT-specific caches
-        self.reasoning_cache = {}  # Cache for reasoning patterns
-        self.cot_results_cache = {}  # Cache for complete CoT results
+        # Additional CoT-specific attributes
+        self.reasoning_cache = {}
+        self.cot_results_cache = {}
+        self.cot_results = []
         
-        # Load CoT-specific caches
+        # Load CoT-specific cached data
         self._load_cot_cache()
     
+    def _get_db_path(self) -> str:
+        """Get full path for SQLite database file"""
+        # Store database in the cache directory instead of Data directory
+        return os.path.join(self.cache_config.cache_dir, self.cache_config.sqlite_db_file)
+    
+    def __del__(self):
+        """Save CoT caches before destruction"""
+        if hasattr(self, 'cache_config') and self.cache_config.enable_cache:
+            try:
+                self._save_cot_cache()
+            except Exception as e:
+                print(f"[CACHE] Error saving CoT cache during cleanup: {e}")
+            super().__del__()
+
     def _load_cot_cache(self):
         """Load CoT-specific cached data"""
         try:
-            # Load reasoning cache
-            if self._is_cache_valid(self.cache_config.reasoning_cache_file):
-                with open(self._get_cache_path(self.cache_config.reasoning_cache_file), 'rb') as f:
-                    self.reasoning_cache = pickle.load(f)
-                    print(f"[COT_CACHE] Loaded {len(self.reasoning_cache)} reasoning patterns")
-            
-            # Load CoT results cache
-            if self._is_cache_valid(self.cache_config.cot_results_cache_file):
-                with open(self._get_cache_path(self.cache_config.cot_results_cache_file), 'rb') as f:
-                    self.cot_results_cache = pickle.load(f)
-                    print(f"[COT_CACHE] Loaded {len(self.cot_results_cache)} CoT results")
-                    
+            if self.cache_config.use_sqlite:
+                self._load_cot_from_sqlite()
+            else:
+                self._load_cot_from_files()
         except Exception as e:
             print(f"[COT_CACHE] Error loading CoT cache: {e}")
             self.reasoning_cache = {}
             self.cot_results_cache = {}
+    
+    def _load_cot_from_sqlite(self):
+        """Load CoT-specific caches from SQLite database"""
+        try:
+            conn = sqlite3.connect(self._get_db_path())
+            cursor = conn.cursor()
+            
+            # Check if CoT tables exist, create them if not
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reasoning_cache (
+                query_hash TEXT PRIMARY KEY,
+                data BLOB,
+                updated_at REAL
+            )
+            ''')
+            
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS cot_results_cache (
+                query_hash TEXT PRIMARY KEY,
+                data BLOB,
+                updated_at REAL
+            )
+            ''')
+            
+            # Load reasoning cache
+            cursor.execute("SELECT query_hash, data FROM reasoning_cache")
+            for row in cursor.fetchall():
+                query_hash, data_blob = row
+                self.reasoning_cache[query_hash] = pickle.loads(data_blob)
+            
+            # Load CoT results cache
+            cursor.execute("SELECT query_hash, data FROM cot_results_cache")
+            for row in cursor.fetchall():
+                query_hash, data_blob = row
+                self.cot_results_cache[query_hash] = pickle.loads(data_blob)
+            
+            conn.close()
+            print(f"[SQLITE] Loaded {len(self.reasoning_cache)} reasoning patterns and {len(self.cot_results_cache)} CoT results")
+            
+        except Exception as e:
+            print(f"[SQLITE] Error loading CoT data from database: {e}")
+            self.reasoning_cache = {}
+            self.cot_results_cache = {}
+    
+    def _load_cot_from_files(self):
+        """Load CoT-specific caches from pickle files (legacy method)"""
+        # Load reasoning cache
+        reasoning_cache_path = self._get_cache_path(self.cache_config.reasoning_cache_file)
+        if self._is_cache_valid(self.cache_config.reasoning_cache_file) and os.path.exists(reasoning_cache_path):
+            with open(reasoning_cache_path, 'rb') as f:
+                self.reasoning_cache = pickle.load(f)
+                print(f"[CACHE] Loaded {len(self.reasoning_cache)} reasoning patterns from cache")
+            
+        # Load CoT results cache
+        cot_results_cache_path = self._get_cache_path(self.cache_config.cot_results_cache_file)
+        if self._is_cache_valid(self.cache_config.cot_results_cache_file) and os.path.exists(cot_results_cache_path):
+            with open(cot_results_cache_path, 'rb') as f:
+                self.cot_results_cache = pickle.load(f)
+                print(f"[CACHE] Loaded {len(self.cot_results_cache)} CoT results from cache")
     
     def _save_cot_cache(self):
         """Save CoT-specific cached data"""
@@ -78,20 +145,58 @@ class OptimizedCoTRAG(OptimizedRAG):
             return
         
         try:
-            # Save reasoning cache
-            if self.cache_config.enable_reasoning_cache:
-                with open(self._get_cache_path(self.cache_config.reasoning_cache_file), 'wb') as f:
-                    pickle.dump(self.reasoning_cache, f)
+            if self.cache_config.use_sqlite:
+                self._save_cot_to_sqlite()
+            else:
+                self._save_cot_to_files()
             
-            # Save CoT results cache
-            with open(self._get_cache_path(self.cache_config.cot_results_cache_file), 'wb') as f:
-                pickle.dump(self.cot_results_cache, f)
-            
-            print(f"[COT_CACHE] Saved CoT caches")
+            print(f"[CACHE] Saved CoT caches")
             
         except Exception as e:
             print(f"[COT_CACHE] Error saving CoT cache: {e}")
     
+    def _save_cot_to_sqlite(self):
+        """Save CoT-specific caches to SQLite database"""
+        try:
+            conn = sqlite3.connect(self._get_db_path())
+            cursor = conn.cursor()
+            
+            # Begin transaction
+            conn.execute("BEGIN TRANSACTION")
+            
+            # Save reasoning cache
+            current_time = time.time()
+            for query_hash, data in self.reasoning_cache.items():
+                # Convert data to binary blob using pickle
+                data_blob = pickle.dumps(data)
+                cursor.execute("INSERT OR REPLACE INTO reasoning_cache (query_hash, data, updated_at) VALUES (?, ?, ?)",
+                              (query_hash, data_blob, current_time))
+            
+            # Save CoT results cache
+            for query_hash, data in self.cot_results_cache.items():
+                # Convert data to binary blob using pickle
+                data_blob = pickle.dumps(data)
+                cursor.execute("INSERT OR REPLACE INTO cot_results_cache (query_hash, data, updated_at) VALUES (?, ?, ?)",
+                              (query_hash, data_blob, current_time))
+            
+            # Commit transaction
+            conn.commit()
+            conn.close()
+            print(f"[SQLITE] Saved {len(self.reasoning_cache)} reasoning patterns and {len(self.cot_results_cache)} CoT results to database")
+            
+        except Exception as e:
+            print(f"[SQLITE] Error saving CoT data to database: {e}")
+    
+    def _save_cot_to_files(self):
+        """Save CoT-specific caches to pickle files (legacy method)"""
+        # Save reasoning cache
+        with open(self._get_cache_path(self.cache_config.reasoning_cache_file), 'wb') as f:
+            pickle.dump(self.reasoning_cache, f)
+        
+        # Save CoT results cache
+        with open(self._get_cache_path(self.cache_config.cot_results_cache_file), 'wb') as f:
+            pickle.dump(self.cot_results_cache, f)
+
     def _get_reasoning_pattern_hash(self, question_type: str, context_summary: str) -> str:
         """Generate hash for reasoning pattern caching"""
         pattern_str = f"{question_type}_{context_summary}"
@@ -562,44 +667,57 @@ Step {step_number}: {steps[0] if step_number <= len(steps) else 'Continue reason
     
     def clear_cot_cache(self):
         """Clear CoT-specific caches"""
+        # Clear CoT-specific caches
         self.reasoning_cache = {}
         self.cot_results_cache = {}
         
-        # Remove CoT cache files
-        cot_cache_files = [
-            self.cache_config.reasoning_cache_file,
-            self.cache_config.cot_results_cache_file
-        ]
+        if self.cache_config.use_sqlite:
+            try:
+                conn = sqlite3.connect(self._get_db_path())
+                cursor = conn.cursor()
+                
+                # Clear CoT tables
+                cursor.execute("DELETE FROM reasoning_cache")
+                cursor.execute("DELETE FROM cot_results_cache")
+                
+                conn.commit()
+                conn.close()
+                print("[SQLITE] Reset CoT database cache")
+            except Exception as e:
+                print(f"[SQLITE] Error resetting CoT database: {e}")
+        else:
+            # Remove CoT cache files
+            cot_cache_files = [
+                self.cache_config.reasoning_cache_file,
+                self.cache_config.cot_results_cache_file
+            ]
+            
+            for cache_file in cot_cache_files:
+                cache_path = self._get_cache_path(cache_file)
+                if os.path.exists(cache_path):
+                    os.remove(cache_path)
+                    print(f"[CACHE] Removed {cache_path}")
         
-        for cache_file in cot_cache_files:
-            cache_path = self._get_cache_path(cache_file)
-            if os.path.exists(cache_path):
-                os.remove(cache_path)
-                print(f"[COT_CACHE] Removed {cache_path}")
-        
-        print("[COT_CACHE] All CoT caches cleared")
+        print("[CACHE] All CoT caches cleared")
 
-# Factory function for easy integration
-def create_optimized_cot_rag(working_dir: str = "./rag_cache",
-                           llm_model_func=None,
-                           embedding_func=None,
-                           max_reasoning_steps: int = 5,
-                           confidence_threshold: float = 0.7,
-                           enable_cache: bool = True) -> OptimizedCoTRAG:
+def create_optimized_cot_rag(working_dir: str = "./cot_rag_cache", 
+                         llm_model_func=None, 
+                         embedding_func=None,
+                         max_reasoning_steps: int = 5,
+                         confidence_threshold: float = 0.7,
+                         enable_cache: bool = True,
+                         use_sqlite: bool = True) -> OptimizedCoTRAG:
     """Create an optimized CoT-RAG instance with default settings"""
-    
-    from rag.llm import hugging_face_embedding
-    
     if embedding_func is None:
+        from rag.llm import hugging_face_embedding
         embedding_func = hugging_face_embedding
-    
     if llm_model_func is None:
         llm_model_func = lambda prompt: prompt  # Default passthrough
     
     cache_config = CoTCacheConfig(
         cache_dir=working_dir,
         enable_cache=enable_cache,
-        enable_reasoning_cache=enable_cache
+        use_sqlite=use_sqlite
     )
     
     return OptimizedCoTRAG(

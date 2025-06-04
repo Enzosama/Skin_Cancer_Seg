@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  my_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: my_app_container
+    volumes:
+      - ./data:/data
+      - ./rag_cache:/app/rag_cache
+    environment:
+      TRANSFORMERS_CACHE: /tmp/huggingface
+      HF_HOME: /tmp/huggingface
+      HUGGINGFACE_HUB_CACHE: /tmp/huggingface
+      MPLCONFIGDIR: /tmp/matplotlib
+    ports:
+      - "7860:7860"
+  node_2:
+    user: root
+    image: ${IMAGE:-my_app}
+    volumes:
+      - ./rag_cache:/app/rag_cache
+    environment:
+      TRANSFORMERS_CACHE: /tmp/huggingface
+      HF_HOME: /tmp/huggingface
+      HUGGINGFACE_HUB_CACHE: /tmp/huggingface
+      MPLCONFIGDIR: /tmp/matplotlib
+  node_3:
+    user: root
+    image: ${IMAGE:-my_app}
+    volumes:
+      - ./rag_cache:/app/rag_cache
+    environment:
+      TRANSFORMERS_CACHE: /tmp/huggingface
+      HF_HOME: /tmp/huggingface
+      HUGGINGFACE_HUB_CACHE: /tmp/huggingface
+      MPLCONFIGDIR: /tmp/matplotlib
+  

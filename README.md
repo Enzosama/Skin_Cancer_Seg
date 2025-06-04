@@ -1,2 +1,10 @@
-# Skin_Cancer_Seg
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Enzosama/Skin_Cancer_Seg)
+---
+title: {{title}}
+emoji: {{emoji}}
+colorFrom: {{colorFrom}}
+colorTo: {{colorTo}}
+sdk: {{sdk}}
+sdk_version: "{{sdkVersion}}"
+app_file: app.py
+pinned: false
+---
